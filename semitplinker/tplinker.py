@@ -140,8 +140,8 @@ class HandshakingTaggingScheme(object):
         spots: [(rel_id, start_ind, end_ind, tag_id), ]
         '''
         spots = []
-
-        for shaking_inds in shaking_tag.nonzero():
+        # 性能瓶颈所在
+        for shaking_inds in shaking_tag.nonzero(as_tuple=False):
             rel_id = shaking_inds[0].item()
             tag_id = shaking_tag[rel_id][shaking_inds[1]].item()
             matrix_inds = self.shaking_ind2matrix_ind[shaking_inds[1]]
@@ -157,7 +157,7 @@ class HandshakingTaggingScheme(object):
         '''
         spots = []
 
-        for shaking_ind in shaking_tag.nonzero():
+        for shaking_ind in shaking_tag.nonzero(as_tuple=False):
             shaking_ind_ = shaking_ind[0].item()
             tag_id = shaking_tag[shaking_ind_]
             matrix_inds = self.shaking_ind2matrix_ind[shaking_ind_]

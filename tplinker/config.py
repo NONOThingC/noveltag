@@ -4,7 +4,7 @@ import random
 common = {
     "exp_name": "nyt",
     "rel2id": "rel2id.json",
-    "device_num": 1,
+    "device_num": 0,
 #     "encoder": "BiLSTM",
     "encoder": "BERT", 
     "hyper_parameters": {

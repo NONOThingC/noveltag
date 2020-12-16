@@ -25,8 +25,6 @@ from tplinker import (HandshakingTaggingScheme, DataMaker4Bert,
 # import wandb
 import config
 from glove import Glove
-import torch
-from torch import nn
 import torch.nn.functional as F
 import random
 import numpy as np
@@ -54,7 +52,7 @@ hyper_parameters = config["hyper_parameters"]
 # Gpu set
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 os.environ["CUDA_VISIBLE_DEVICES"] = str(config["device_num"])
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # for reproductivity
 np.random.seed(hyper_parameters["seed"])
 torch.manual_seed(hyper_parameters["seed"])  # pytorch random seed
@@ -433,7 +431,54 @@ if not config["fr_scratch"]:
     print("------------model state {} loaded ----------------".format(
         model_state_path.split("/")[-1]))
 
-#del train_n_valid(train_dataloader, valid_dataloader, optimizer, scheduler, hyper_parameters["epochs"])
+def valid_step(model,batch_valid_data):
+    if config["encoder"] == "BERT":
+        sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+        batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+            batch_input_ids.to(device), batch_attention_mask.to(device),
+            batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+            batch_head_rel_shaking_tag.to(device),
+            batch_tail_rel_shaking_tag.to(device))
+
+    elif config["encoder"] in {
+            "BiLSTM",
+    }:
+        sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+        batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+            batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+            batch_head_rel_shaking_tag.to(device),
+            batch_tail_rel_shaking_tag.to(device))
+
+    with torch.no_grad():
+        if config["encoder"] == "BERT":
+            ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                batch_input_ids,
+                batch_attention_mask,
+                batch_token_type_ids,
+            )
+        elif config["encoder"] in {
+                "BiLSTM",
+        }:
+            ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                batch_input_ids)
+
+    ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                 batch_ent_shaking_tag)
+    head_rel_sample_acc = metrics.get_sample_accuracy(
+        head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+    tail_rel_sample_acc = metrics.get_sample_accuracy(
+        tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+    rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
+                                  ent_shaking_outputs,
+                                  head_rel_shaking_outputs,
+                                  tail_rel_shaking_outputs,
+                                  hyper_parameters["match_pattern"])
+
+    return ent_sample_acc.item(), head_rel_sample_acc.item(
+    ), tail_rel_sample_acc.item(), rel_cpg
 
 ## iterative update
 def split_sample(dataset,n_part):
@@ -472,11 +517,10 @@ def stratified_sample(dataset, ratio):
 # parameters
 BATCH_SIZE=32
 LABEL_OF_TRAIN = 0.2  # Label ratio
-UNLABEL_OF_TRAIN = 0.5  # Unlabel ratio
-FIRST_EPOCHS=8
+FIRST_EPOCHS=2
 EPOCHS = 5  #
-TOTAL_EPOCHS = 2
-MATE_EPOCHS = 10
+TOTAL_EPOCHS = 1
+MATE_EPOCHS = 2
 seed_val = 19
 LAMBD = 0.2
 # stratified data
@@ -490,25 +534,36 @@ labeled_dataset, unlabeled_dataset_total = stratified_sample(MyDataset(indexed_t
 unlabeled_dataset=random_split(unlabeled_dataset_total,split_sample(unlabeled_dataset_total,n_part=MATE_EPOCHS))
 # Create the DataLoaders for our label and unlabel sets.
 labeled_dataloader = DataLoader(
-    labeled_dataset,  # The training samples.
-    sampler=RandomSampler(labeled_dataset),  # Select batches randomly
-    batch_size=BATCH_SIZE  # Trains with this batch size.
+    labeled_dataset,
+    batch_size=hyper_parameters["batch_size"],
+    shuffle=True,
+    num_workers=6,
+    drop_last=False,
+    collate_fn=data_maker.generate_batch,
 )
+
 unlabeled_dataloader = []
 for i in range(MATE_EPOCHS):
     unlabeled_dataloader_now = DataLoader(
         unlabeled_dataset[i],  # The training samples.
-        sampler=RandomSampler(unlabeled_dataset[i]),  # Select batches randomly
-        batch_size=BATCH_SIZE  # Trains with this batch size.
+        batch_size=hyper_parameters["batch_size"],
+        shuffle=True,
+        num_workers=6,
+        drop_last=False,
+        collate_fn=data_maker.generate_batch,
     )
     unlabeled_dataloader.append(unlabeled_dataloader_now)
-indexed_valid_data = MyDataset(data_maker.get_indexed_data(valid_data, max_seq_len))
+indexed_valid_data = data_maker.get_indexed_data(valid_data, max_seq_len)
 # build valid dataloader
-unlabeled_dataloader_now = DataLoader(
-    indexed_valid_data,
-    sampler=RandomSampler(indexed_valid_data),
-    batch_size=BATCH_SIZE
+valid_dataloader = DataLoader(
+    MyDataset(indexed_valid_data),
+    batch_size=hyper_parameters["batch_size"],
+    shuffle=True,
+    num_workers=6,
+    drop_last=False,
+    collate_fn=data_maker.generate_batch,
 )
+
 
 print("training start...\n")
 cnt = 0
@@ -659,10 +714,9 @@ for total_epoch in range(TOTAL_EPOCHS):
             t_ep = time.time()
             total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
             total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
-            for batch_ind, batch_valid_data in enumerate(
-                    tqdm(valid_dataloader, desc="Validating")):
+            for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
                 ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg = valid_step(
-                    batch_valid_data)
+                    modelf1,batch_valid_data)
 
                 total_ent_sample_acc += ent_sample_acc
                 total_head_rel_sample_acc += head_rel_sample_acc
@@ -720,76 +774,123 @@ for total_epoch in range(TOTAL_EPOCHS):
 
         # -------f1 predict and g2 update---------
         print("f1 predict and g2 update start...\n")
-
         for epoch_i in range(0, EPOCHS):
             print('---f1 and g2 Epoch {:} / {:} ---'.format(epoch_i + 1, EPOCHS))
             # Measure how long the training epoch takes.
-            t0 = time.time()
-
-            # Reset the total loss for this epoch.
-            total_train_loss = 0
-
-            modelf2.train()
+            ## train
             modelf1.eval()
+            modelf2.train()
+            t_ep = time.time()
+            start_lr = optimizer1.param_groups[0]['lr']
+            total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+            for batch_ind, batch_train_data in enumerate(train_dataloader):
+                t_batch = time.time()
+                z = (2 * len(rel2id) + 1)
+                steps_per_ep = len(train_dataloader)
+                total_steps = hyper_parameters[
+                                  "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+                current_step = steps_per_ep * ep + batch_ind
+                w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
+                w_rel = min((len(rel2id) / z) * current_step / total_steps,
+                            (len(rel2id) / z))
+                loss_weights = {"ent": w_ent, "rel": w_rel}
+                if config["encoder"] == "BERT":
+                    sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+                    batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                        batch_input_ids.to(device), batch_attention_mask.to(device),
+                        batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                        batch_head_rel_shaking_tag.to(device),
+                        batch_tail_rel_shaking_tag.to(device))
+                elif config["encoder"] in {"BiLSTM", }:
+                    sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+                    batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                        batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                        batch_head_rel_shaking_tag.to(device),
+                        batch_tail_rel_shaking_tag.to(device))
+                # modelf1 forward
+                # zero the parameter gradients
+                optimizer1.zero_grad()
+                if config["encoder"] == "BERT":
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids,
+                        batch_attention_mask,
+                        batch_token_type_ids,
+                    )
+                elif config["encoder"] in {
+                    "BiLSTM",
+                }:
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids)
 
-            for step, batch in enumerate(labeled_dataloader):
-                # Progress update every 40 batches.
-                if step % 40 == 0 and not step == 0:
-                    # Calculate elapsed time in minutes.
-                    elapsed = format_time(time.time() - t0)
-                    # Report progress.
+                optimizer2.zero_grad()
+                if config["encoder"] == "BERT":
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
+                        batch_input_ids,
+                        batch_attention_mask,
+                        batch_token_type_ids,
+                    )
+                elif config["encoder"] in {
+                    "BiLSTM",
+                }:
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
+                        batch_input_ids)
 
-                # Unpack this training batch from our dataloader.
-                b_input_ids = batch[0].to(device)
-                b_input_mask = batch[1].to(device)
-                b_labels = batch[2].to(device)
-                b_e1_pos = batch[3].to(device)
-                b_e2_pos = batch[4].to(device)
-                b_w = batch[5].to(device)
+                w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
+                loss1 = w_ent * loss_func1(
+                    ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
+                    head_rel_shaking_outputs,
+                    batch_head_rel_shaking_tag) + w_rel * loss_func1(
+                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
 
-                # f1 predict
-                modelf1.zero_grad()
-                #with torch.no_grad():
-                    # Forward pass, calculate logit predictions.
-                loss1, logits1, _ = modelf1(b_input_ids,
-                                           token_type_ids=None,
-                                           attention_mask=b_input_mask,
-                                           labels=b_labels,
-                                           e1_pos=b_e1_pos,
-                                           e2_pos=b_e2_pos,
-                                           w=b_w)
-
-                # g2 train
-                modelf2.zero_grad()
-                # Perform a forward pass
-                loss2, logits2, _ = modelf2(b_input_ids,
-                                         token_type_ids=None,
-                                         attention_mask=b_input_mask,
-                                         labels=b_labels,
-                                         e1_pos=b_e1_pos,
-                                         e2_pos=b_e2_pos,
-                                         w=b_w)
-
-                # Perform a backward pass to calculate the gradients.
-                #loss1.sum().backward()
+                loss2 = w_ent * loss_func2(
+                    ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func2(
+                    head_rel_shaking_outputs,
+                    batch_head_rel_shaking_tag) + w_rel * loss_func2(
+                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
                 (loss1.sum() + 0.4 * loss2.sum()).backward()
-                # Clip the norm of the gradients to 1.0 to prevent exploding gradients problem.
-                torch.nn.utils.clip_grad_norm_(modelf2.parameters(), 1.0)
-                # Update parameters and take a step using the computed gradient
                 optimizer2.step()
-                # Update the learning rate.
+
+                ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                             batch_ent_shaking_tag)
+                head_rel_sample_acc = metrics.get_sample_accuracy(
+                    head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+                tail_rel_sample_acc = metrics.get_sample_accuracy(
+                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+                loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
+                ), tail_rel_sample_acc.item()
                 scheduler2.step()
 
-                # Accumulate the training loss over all of the batches
-                total_train_loss += loss2.sum().item()
+                total_loss += loss1
+                total_ent_sample_acc += ent_sample_acc
+                total_head_rel_sample_acc += head_rel_sample_acc
+                total_tail_rel_sample_acc += tail_rel_sample_acc
 
-            # Calculate the average loss over all of the batches.
-            avg_train_loss = total_train_loss / len(labeled_dataloader)
-            # Measure how long this epoch took.
-            training_time = format_time(time.time() - t0)
+                avg_loss = total_loss / (batch_ind + 1)
+                avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
+                avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
+                                                                       1)
+                avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
+                                                                       1)
 
-            print(" g2 Average training loss by g2: {0:.4f}".format(avg_train_loss))
-            # print(" g2 Training epcoh took: {:}".format(training_time))
+                batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
+
+                print(batch_print_format.format(
+                    experiment_name,
+                    config["run_name"],
+                    ep + 1,
+                    FIRST_EPOCHS,
+                    batch_ind + 1,
+                    len(train_dataloader),
+                    avg_loss,
+                    avg_ent_sample_acc,
+                    avg_head_rel_sample_acc,
+                    avg_tail_rel_sample_acc,
+                    optimizer2.param_groups[0]['lr'],
+                    time.time() - t_batch,
+                    time.time() - t_ep,
+                ),
+                    end="")
 
         # -------g2 generate pseudo label---------
 
@@ -908,117 +1009,301 @@ for total_epoch in range(TOTAL_EPOCHS):
         )
 
     # train f1 with all data
-    for epoch_i in range(0, EPOCHS):
-        print('---Last Train Epoch {:} / {:} ---'.format(epoch_i + 1, EPOCHS))
-        # Measure how long the training epoch takes.
-        t0 = time.time()
-
-        # Reset the total loss for this epoch.
-        total_train_loss = 0
-        # Put the model into training mode
+    max_f1 = -1
+    for ep in range(FIRST_EPOCHS):
+        ## train
         modelf1.train()
+        t_ep = time.time()
+        start_lr = optimizer1.param_groups[0]['lr']
+        total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+        for batch_ind, batch_train_data in enumerate(train_dataloader):
+            t_batch = time.time()
+            z = (2 * len(rel2id) + 1)
+            steps_per_ep = len(train_dataloader)
+            total_steps = hyper_parameters[
+                              "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+            current_step = steps_per_ep * ep + batch_ind
+            w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
+            w_rel = min((len(rel2id) / z) * current_step / total_steps,
+                        (len(rel2id) / z))
+            loss_weights = {"ent": w_ent, "rel": w_rel}
 
-        for step, batch in enumerate(train_dataloader):
-            # Progress update every 40 batches.
-            if step % 40 == 0 and not step == 0:
-                # Calculate elapsed time in minutes.
-                elapsed = format_time(time.time() - t0)
+            if config["encoder"] == "BERT":
+                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+                batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_attention_mask.to(device),
+                    batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
 
-            # Unpack this training batch from our dataloader.
-            b_input_ids = batch[0].to(device)
-            b_input_mask = batch[1].to(device)
-            b_labels = batch[2].to(device)
-            b_e1_pos = batch[3].to(device)
-            b_e2_pos = batch[4].to(device)
-            b_w = batch[5].to(device)
+            elif config["encoder"] in {
+                "BiLSTM",
+            }:
+                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
 
-            modelf1.zero_grad()
+                batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
+            # modelf1 forward
+            # zero the parameter gradients
+            optimizer1.zero_grad()
 
-            # Perform a forward pass (evaluate the model on this training batch)
-            loss, logits, _ = modelf1(b_input_ids,
-                                   token_type_ids=None,
-                                   attention_mask=b_input_mask,
-                                   labels=b_labels,
-                                   e1_pos=b_e1_pos,
-                                   e2_pos=b_e2_pos,
-                                   w=b_w)
+            if config["encoder"] == "BERT":
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                    batch_input_ids,
+                    batch_attention_mask,
+                    batch_token_type_ids,
+                )
+            elif config["encoder"] in {
+                "BiLSTM",
+            }:
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                    batch_input_ids)
 
-            # Accumulate the training loss over all of the batches
-            total_train_loss += loss.sum().item()
-            # Perform a backward pass to calculate the gradients.
-            loss.sum().backward()
-            # Clip the norm of the gradients to 1.0 to prevent exploding gradients problem.
-            torch.nn.utils.clip_grad_norm_(modelf1.parameters(), 1.0)
-            # Update parameters and take a step using the computed gradient
+            w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
+            loss1 = w_ent * loss_func1(
+                ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
+                head_rel_shaking_outputs,
+                batch_head_rel_shaking_tag) + w_rel * loss_func1(
+                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+            loss1.backward()
             optimizer1.step()
-            # Update the learning rate.
+
+            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                         batch_ent_shaking_tag)
+            head_rel_sample_acc = metrics.get_sample_accuracy(
+                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+            tail_rel_sample_acc = metrics.get_sample_accuracy(
+                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+            loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
+            ), tail_rel_sample_acc.item()
             scheduler1.step()
 
-        # Calculate the average loss over all of the batches.
-        avg_train_loss = total_train_loss / len(train_dataloader)
-        # Measure how long this epoch took.
-        training_time = format_time(time.time() - t0)
+            total_loss += loss1
+            total_ent_sample_acc += ent_sample_acc
+            total_head_rel_sample_acc += head_rel_sample_acc
+            total_tail_rel_sample_acc += tail_rel_sample_acc
 
-        print(" f1 Average training loss: {0:.4f}".format(avg_train_loss))
-        # print(" f1 Training epcoh took: {:}".format(training_time))
+            avg_loss = total_loss / (batch_ind + 1)
+            avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
+            avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
+                                                                   1)
+            avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
+                                                                   1)
 
-     # final f1 validation
-    print("final validation start...\n")
-    t0 = time.time()
+            batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
 
-    # Put the model in evaluation mode--the dropout layers behave differently during evaluation.
-    modelf1.eval()
+            print(batch_print_format.format(
+                experiment_name,
+                config["run_name"],
+                ep + 1,
+                FIRST_EPOCHS,
+                batch_ind + 1,
+                len(train_dataloader),
+                avg_loss,
+                avg_ent_sample_acc,
+                avg_head_rel_sample_acc,
+                avg_tail_rel_sample_acc,
+                optimizer1.param_groups[0]['lr'],
+                time.time() - t_batch,
+                time.time() - t_ep,
+            ),
+                end="")
 
-    # Tracking variables
-    total_eval_accuracy = 0
-    total_eval_loss = 0
-    nb_eval_steps = 0
+            if config["logger"] == "wandb" and batch_ind % hyper_parameters[
+                "log_interval"] == 0:
+                logger.log({
+                    "train_loss": avg_loss,
+                    "train_ent_seq_acc": avg_ent_sample_acc,
+                    "train_head_rel_acc": avg_head_rel_sample_acc,
+                    "train_tail_rel_acc": avg_tail_rel_sample_acc,
+                    "learning_rate": optimizer1.param_groups[0]['lr'],
+                    "time": time.time() - t_ep,
+                })
 
-    all_prediction = np.array([])
-    all_ground_truth = np.array([])
+        if config[
+            "logger"] != "wandb":  # only log once for training if logger is not wandb
+            logger.log({
+                "train_loss": avg_loss,
+                "train_ent_seq_acc": avg_ent_sample_acc,
+                "train_head_rel_acc": avg_head_rel_sample_acc,
+                "train_tail_rel_acc": avg_tail_rel_sample_acc,
+                "learning_rate": optimizer1.param_groups[0]['lr'],
+                "time": time.time() - t_ep,
+            })
 
-    # Evaluate data for one epoch
-    for batch in validation_dataloader:
-        # Unpack this training batch from our dataloader.
-        b_input_ids = batch[0].to(device)
-        b_input_mask = batch[1].to(device)
-        b_labels = batch[2].to(device)
-        b_e1_pos = batch[3].to(device)
-        b_e2_pos = batch[4].to(device)
-        b_w = batch[5].to(device)
+        ## valid
+        modelf1.eval()
+        t_ep = time.time()
+        total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+        total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+        for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+            ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg = valid_step(
+                modelf1, batch_valid_data)
 
-        with torch.no_grad():
-            # Forward pass, calculate logit predictions.
-            (loss, logits, _) = modelf1(b_input_ids,
-                                     token_type_ids=None,
-                                     attention_mask=b_input_mask,
-                                     labels=b_labels,
-                                     e1_pos=b_e1_pos,
-                                     e2_pos=b_e2_pos,
-                                     w=b_w)
+            total_ent_sample_acc += ent_sample_acc
+            total_head_rel_sample_acc += head_rel_sample_acc
+            total_tail_rel_sample_acc += tail_rel_sample_acc
 
-        # Accumulate the validation loss.
-        total_eval_loss += loss.sum().item()
-        # Move logits and labels to CPU
-        logits = logits.detach().cpu().numpy()
-        label_ids = b_labels.to('cpu').numpy()
-        pred_flat = np.argmax(logits, axis=1).flatten()
-        labels_flat = label_ids.flatten()
-        all_prediction = np.concatenate((all_prediction, pred_flat), axis=None)
-        all_ground_truth = np.concatenate((all_ground_truth, labels_flat), axis=None)
+            total_rel_correct_num += rel_cpg[0]
+            total_rel_pred_num += rel_cpg[1]
+            total_rel_gold_num += rel_cpg[2]
+
+        avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+        avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+        avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+
+        rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+                                         total_rel_pred_num,
+                                         total_rel_gold_num)
+
+        log_dict = {
+            "val_ent_seq_acc": avg_ent_sample_acc,
+            "val_head_rel_acc": avg_head_rel_sample_acc,
+            "val_tail_rel_acc": avg_tail_rel_sample_acc,
+            "val_prec": rel_prf[0],
+            "val_recall": rel_prf[1],
+            "val_f1": rel_prf[2],
+            "time": time.time() - t_ep,
+        }
+        logger.log(log_dict)
+        pprint(log_dict)
+
+        valid_f1 = rel_prf[2]
+
+        ## save when better
+        # if valid_f1 >= max_f1:
+        #     max_f1 = valid_f1
+        #     if valid_f1 > config["f1_2_save"]:  # save the best model
+        #         modle_state_num = len(
+        #             glob.glob(model_state_dict_dir + "/model_state_dict_*.pt"))
+        #         torch.save(
+        #             model.state_dict(),
+        #             os.path.join(
+        #                 model_state_dict_dir,
+        #                 "model_state_dict_{}.pt".format(modle_state_num)))
+
+        # save best
+        if valid_f1 >= max_f1:
+            max_f1 = valid_f1
+            if valid_f1 > config["f1_2_save"]:  # save the best model
+                torch.save(
+                    modelf1.state_dict(),
+                    os.path.join(
+                        model_state_dict_dir,
+                        "model_state_dict_best.pt"))
+    #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
+    #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
+
+    # for epoch_i in range(0, EPOCHS):
+    #     print('---Last Train Epoch {:} / {:} ---'.format(epoch_i + 1, EPOCHS))
+    #     # Measure how long the training epoch takes.
+    #     t0 = time.time()
+    #
+    #     # Reset the total loss for this epoch.
+    #     total_train_loss = 0
+    #     # Put the model into training mode
+    #     modelf1.train()
+    #
+    #     for step, batch in enumerate(train_dataloader):
+    #         # Progress update every 40 batches.
+    #         if step % 40 == 0 and not step == 0:
+    #             # Calculate elapsed time in minutes.
+    #             elapsed = format_time(time.time() - t0)
+    #         # Unpack this training batch from our dataloader.
+    #         b_input_ids = batch[0].to(device)
+    #         b_input_mask = batch[1].to(device)
+    #         b_labels = batch[2].to(device)
+    #         b_e1_pos = batch[3].to(device)
+    #         b_e2_pos = batch[4].to(device)
+    #         b_w = batch[5].to(device)
+    #         modelf1.zero_grad()
+    #         # Perform a forward pass (evaluate the model on this training batch)
+    #         loss, logits, _ = modelf1(b_input_ids,
+    #                                token_type_ids=None,
+    #                                attention_mask=b_input_mask,
+    #                                labels=b_labels,
+    #                                e1_pos=b_e1_pos,
+    #                                e2_pos=b_e2_pos,
+    #                                w=b_w)
+    #
+    #         # Accumulate the training loss over all of the batches
+    #         total_train_loss += loss.sum().item()
+    #         # Perform a backward pass to calculate the gradients.
+    #         loss.sum().backward()
+    #         # Clip the norm of the gradients to 1.0 to prevent exploding gradients problem.
+    #         torch.nn.utils.clip_grad_norm_(modelf1.parameters(), 1.0)
+    #         # Update parameters and take a step using the computed gradient
+    #         optimizer1.step()
+    #         # Update the learning rate.
+    #         scheduler1.step()
+    #     # Calculate the average loss over all of the batches.
+    #     avg_train_loss = total_train_loss / len(train_dataloader)
+    #     # Measure how long this epoch took.
+    #     training_time = format_time(time.time() - t0)
+    #     print(" f1 Average training loss: {0:.4f}".format(avg_train_loss))
+    #     # print(" f1 Training epcoh took: {:}".format(training_time))
+    #
+    #  # final f1 validation
+    # print("final validation start...\n")
+    # t0 = time.time()
+    #
+    # # Put the model in evaluation mode--the dropout layers behave differently during evaluation.
+    # modelf1.eval()
+    #
+    # # Tracking variables
+    # total_eval_accuracy = 0
+    # total_eval_loss = 0
+    # nb_eval_steps = 0
+    #
+    # all_prediction = np.array([])
+    # all_ground_truth = np.array([])
+    #
+    # # Evaluate data for one epoch
+    # for batch in validation_dataloader:
+    #     # Unpack this training batch from our dataloader.
+    #     b_input_ids = batch[0].to(device)
+    #     b_input_mask = batch[1].to(device)
+    #     b_labels = batch[2].to(device)
+    #     b_e1_pos = batch[3].to(device)
+    #     b_e2_pos = batch[4].to(device)
+    #     b_w = batch[5].to(device)
+    #
+    #     with torch.no_grad():
+    #         # Forward pass, calculate logit predictions.
+    #         (loss, logits, _) = modelf1(b_input_ids,
+    #                                  token_type_ids=None,
+    #                                  attention_mask=b_input_mask,
+    #                                  labels=b_labels,
+    #                                  e1_pos=b_e1_pos,
+    #                                  e2_pos=b_e2_pos,
+    #                                  w=b_w)
+    #
+    #     # Accumulate the validation loss.
+    #     total_eval_loss += loss.sum().item()
+    #     # Move logits and labels to CPU
+    #     logits = logits.detach().cpu().numpy()
+    #     label_ids = b_labels.to('cpu').numpy()
+    #     pred_flat = np.argmax(logits, axis=1).flatten()
+    #     labels_flat = label_ids.flatten()
+    #     all_prediction = np.concatenate((all_prediction, pred_flat), axis=None)
+    #     all_ground_truth = np.concatenate((all_ground_truth, labels_flat), axis=None)
 
 
-    # Calculate the average loss over all of the batches.
-    avg_val_loss = total_eval_loss / len(validation_dataloader)
-
-    validation_time = format_time(time.time() - t0)
-    non_zero_idx = (all_ground_truth != 0)
-    validation_acc = np.sum(all_prediction[non_zero_idx] == all_ground_truth[non_zero_idx]) / len(all_ground_truth[non_zero_idx])
-    validation_f1_score = f1_score(all_ground_truth[non_zero_idx], all_prediction[non_zero_idx], average="micro")
-    print(f"Final validation score:\n acc:{validation_acc:.4f}, micro-f1:{validation_f1_score:.4f}")
-    score(all_ground_truth, all_prediction,verbose=True,NO_RELATION=NO_relation_index)
+    # # Calculate the average loss over all of the batches.
+    # avg_val_loss = total_eval_loss / len(validation_dataloader)
+    #
+    # validation_time = format_time(time.time() - t0)
+    # non_zero_idx = (all_ground_truth != 0)
+    # validation_acc = np.sum(all_prediction[non_zero_idx] == all_ground_truth[non_zero_idx]) / len(all_ground_truth[non_zero_idx])
+    # validation_f1_score = f1_score(all_ground_truth[non_zero_idx], all_prediction[non_zero_idx], average="micro")
+    # print(f"Final validation score:\n acc:{validation_acc:.4f}, micro-f1:{validation_f1_score:.4f}")
+    # score(all_ground_truth, all_prediction,verbose=True,NO_RELATION=NO_relation_index)
 
 # ----------------------training complete-----------------------
 
 print("Training complete!")
-print("Total training took {:} (h:mm:ss)".format(format_time(time.time() - total_t0)))
+# print("Total training took {:} (h:mm:ss)".format(format_time(time.time() - total_t0)))
