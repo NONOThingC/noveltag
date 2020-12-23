@@ -311,12 +311,19 @@ class DataMaker4Bert():
             attention_mask_list.append(tp[2])        
             token_type_ids_list.append(tp[3])        
             tok2char_span_list.append(tp[4])
-            
-            if data_type != "test":
+            try:
+                batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag=tp[6]
+            except:
+                sign_for_not_pesudo=True
+            else:
+                sign_for_not_pesudo=False
+            if sign_for_not_pesudo and data_type != "test":
                 ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[5]
                 ent_spots_list.append(ent_matrix_spots)
                 head_rel_spots_list.append(head_rel_matrix_spots)
                 tail_rel_spots_list.append(tail_rel_matrix_spots)
+
+
 
         # @specific: indexed by bert tokenizer
         batch_input_ids = torch.stack(input_ids_list, dim = 0)
@@ -324,14 +331,17 @@ class DataMaker4Bert():
         batch_token_type_ids = torch.stack(token_type_ids_list, dim = 0)
         
         batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = None, None, None
-        if data_type != "test":
+        if sign_for_not_pesudo and data_type != "test":
             batch_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
             batch_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
             batch_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
 
+
         return sample_list, \
               batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, \
                 batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+
+
 
 class DataMaker4BiLSTM():
     def __init__(self, text2indices, get_tok2char_span_map, handshaking_tagger):
@@ -608,7 +618,7 @@ class MetricsCalculator():
         # (batch_size, )，每个元素是pred与truth之间tag相同的数量
         correct_tag_num = torch.sum(torch.eq(truth, pred_id).float(), dim = 1)
 
-        # seq维上所有tag必须正确，所以correct_tag_num必须等于seq的长度才算一个correct的sample
+        # seq维上所有tag必须正确，所以correct_tag_num必须等于seq的长度才算一个correct的sample，就是说sequence中如果只是一部分词对了，那么correct_tag_num就会小于truth.size()[-1]，下式就不等
         sample_acc_ = torch.eq(correct_tag_num, torch.ones_like(correct_tag_num) * truth.size()[-1]).float()
         sample_acc = torch.mean(sample_acc_)
         return sample_acc

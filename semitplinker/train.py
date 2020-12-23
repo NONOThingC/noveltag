@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from sklearn.metrics import f1_score
 from collections import Counter
 
+import pickle
 
 # In[ ]:
 
@@ -212,7 +213,16 @@ elif config["encoder"] in {
                                   handshaking_tagger)
 
 # In[ ]:
+class PseudoDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
 
+    def __getitem__(self, index):
+
+        return self.data[index]
+
+    def __len__(self):
+        return len(self.data)
 
 class MyDataset(Dataset):
     def __init__(self, data):
@@ -236,7 +246,7 @@ train_dataloader = DataLoader(
     MyDataset(indexed_train_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=6,
+    num_workers=4,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -244,7 +254,7 @@ valid_dataloader = DataLoader(
     MyDataset(indexed_valid_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=6,
+    num_workers=4,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -517,10 +527,9 @@ def stratified_sample(dataset, ratio):
 # parameters
 BATCH_SIZE=32
 LABEL_OF_TRAIN = 0.2  # Label ratio
-FIRST_EPOCHS=2
-EPOCHS = 5  #
+FIRST_EPOCHS=10
 TOTAL_EPOCHS = 1
-MATE_EPOCHS = 2
+MATE_EPOCHS = 4
 seed_val = 19
 LAMBD = 0.2
 # stratified data
@@ -537,7 +546,7 @@ labeled_dataloader = DataLoader(
     labeled_dataset,
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=6,
+    num_workers=4,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -548,7 +557,7 @@ for i in range(MATE_EPOCHS):
         unlabeled_dataset[i],  # The training samples.
         batch_size=hyper_parameters["batch_size"],
         shuffle=True,
-        num_workers=6,
+        num_workers=4,
         drop_last=False,
         collate_fn=data_maker.generate_batch,
     )
@@ -559,12 +568,30 @@ valid_dataloader = DataLoader(
     MyDataset(indexed_valid_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=6,
+    num_workers=4,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
+# build
+pseudo_data_list=None
+def get_pseudo_data(data_list):
+    if data_list is not None:
+        for batch_data in data_list:
+             yield batch_data
+    else:
+        return None
 
-
+# def get_pseudo_data(data_list):
+#     batch_data=[]
+#     if data_list is not None:
+#         for i,data in enumerate(data_list):
+#             batch_data.append((data))
+#             if not (i+1)%(batch_size+1):
+#                 yield batch_data
+#                 batch_data=[]
+#         yield batch_data
+#     else:
+#         return None
 print("training start...\n")
 cnt = 0
 """
@@ -575,12 +602,14 @@ two aspect:
 # count how many rounds the whole big model has to train
 # a round means all unlabel data are labeled
 for total_epoch in range(TOTAL_EPOCHS):
+    fine_data_list=[]
+    pseudo_data_list = []
     # Add an inner loop to judge the entire unlabeled data set finished
     train_dataloader = labeled_dataloader
     print(f"Total epoch{total_epoch}:\n")
 
     for meta_epoch in range(MATE_EPOCHS):
-
+        # -------load pseudo---------
         # -------train f1---------
         print(f"Mate epoch{meta_epoch}:\n")
         max_f1 = -1
@@ -590,6 +619,7 @@ for total_epoch in range(TOTAL_EPOCHS):
             t_ep = time.time()
             start_lr = optimizer1.param_groups[0]['lr']
             total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+            pseudo_iter = get_pseudo_data(pseudo_data_list)
             for batch_ind, batch_train_data in enumerate(train_dataloader):
                 t_batch = time.time()
                 z = (2 * len(rel2id) + 1)
@@ -619,6 +649,23 @@ for total_epoch in range(TOTAL_EPOCHS):
                         batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
                         batch_head_rel_shaking_tag.to(device),
                         batch_tail_rel_shaking_tag.to(device))
+                ## concat pseudo training data
+                try:
+                    pseudo_data=next(pseudo_iter)
+                except:
+                    pseudo_data=[]
+                batch_train_data_new = []
+                for var1,var2 in zip(batch_train_data,pseudo_data):
+                    if isinstance(var2, torch.Tensor):
+                        batch_train_data_new.append(torch.cat([var1,var2],dim=0))
+                    elif isinstance(var2, list):
+                        batch_train_data_new.append(var1.extend(var2))
+                    elif var2 is None:
+                        pass
+                    else:
+                        raise Exception
+                if len(batch_train_data_new):
+                    batch_train_data=batch_train_data_new
                 # modelf1 forward
                 # zero the parameter gradients
                 optimizer1.zero_grad()
@@ -715,38 +762,83 @@ for total_epoch in range(TOTAL_EPOCHS):
             total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
             total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
             for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
-                ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg = valid_step(
-                    modelf1,batch_valid_data)
+                if config["encoder"] == "BERT":
+                    sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+                    batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                        batch_input_ids.to(device), batch_attention_mask.to(device),
+                        batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                        batch_head_rel_shaking_tag.to(device),
+                        batch_tail_rel_shaking_tag.to(device))
+
+                elif config["encoder"] in {
+                    "BiLSTM",
+                }:
+                    sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+                    batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                        batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                        batch_head_rel_shaking_tag.to(device),
+                        batch_tail_rel_shaking_tag.to(device))
+
+                with torch.no_grad():
+                    if config["encoder"] == "BERT":
+                        ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                            batch_input_ids,
+                            batch_attention_mask,
+                            batch_token_type_ids,
+                        )
+                    elif config["encoder"] in {
+                        "BiLSTM",
+                    }:
+                        ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                            batch_input_ids)
+
+                ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                             batch_ent_shaking_tag)
+                head_rel_sample_acc = metrics.get_sample_accuracy(
+                    head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+                tail_rel_sample_acc = metrics.get_sample_accuracy(
+                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+
+                ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc= ent_sample_acc.item(), head_rel_sample_acc.item(
+                ), tail_rel_sample_acc.item()
+
 
                 total_ent_sample_acc += ent_sample_acc
                 total_head_rel_sample_acc += head_rel_sample_acc
                 total_tail_rel_sample_acc += tail_rel_sample_acc
 
-                total_rel_correct_num += rel_cpg[0]
-                total_rel_pred_num += rel_cpg[1]
-                total_rel_gold_num += rel_cpg[2]
+
 
             avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
             avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
             avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
 
-            rel_prf = metrics.get_prf_scores(total_rel_correct_num,
-                                             total_rel_pred_num,
-                                             total_rel_gold_num)
+            # rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+            #                                  total_rel_pred_num,
+            #                                  total_rel_gold_num)
 
+            # log_dict = {
+            #     "val_ent_seq_acc": avg_ent_sample_acc,
+            #     "val_head_rel_acc": avg_head_rel_sample_acc,
+            #     "val_tail_rel_acc": avg_tail_rel_sample_acc,
+            #     "val_prec": rel_prf[0],
+            #     "val_recall": rel_prf[1],
+            #     "val_f1": rel_prf[2],
+            #     "time": time.time() - t_ep,
+            # }
             log_dict = {
                 "val_ent_seq_acc": avg_ent_sample_acc,
                 "val_head_rel_acc": avg_head_rel_sample_acc,
                 "val_tail_rel_acc": avg_tail_rel_sample_acc,
-                "val_prec": rel_prf[0],
-                "val_recall": rel_prf[1],
-                "val_f1": rel_prf[2],
                 "time": time.time() - t_ep,
             }
             logger.log(log_dict)
             pprint(log_dict)
 
-            valid_f1 = rel_prf[2]
+            # valid_f1 = rel_prf[2]
 
             ## save when better
             # if valid_f1 >= max_f1:
@@ -761,294 +853,349 @@ for total_epoch in range(TOTAL_EPOCHS):
             #                 "model_state_dict_{}.pt".format(modle_state_num)))
 
             # save best
-            if valid_f1 >= max_f1:
-                max_f1 = valid_f1
-                if valid_f1 > config["f1_2_save"]:  # save the best model
-                    torch.save(
-                        modelf1.state_dict(),
-                        os.path.join(
-                            model_state_dict_dir,
-                            "model_state_dict_best.pt"))
+            # if valid_f1 >= max_f1:
+            #     max_f1 = valid_f1
+            #     if valid_f1 > config["f1_2_save"]:  # save the best model
+            #         torch.save(
+            #             modelf1.state_dict(),
+            #             os.path.join(
+            #                 model_state_dict_dir,
+            #                 "model_state_dict_best.pt"))
         #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
         #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
+        # -------generate pseudo label---------
 
-        # -------f1 predict and g2 update---------
-        print("f1 predict and g2 update start...\n")
-        for epoch_i in range(0, EPOCHS):
-            print('---f1 and g2 Epoch {:} / {:} ---'.format(epoch_i + 1, EPOCHS))
-            # Measure how long the training epoch takes.
-            ## train
-            modelf1.eval()
-            modelf2.train()
-            t_ep = time.time()
-            start_lr = optimizer1.param_groups[0]['lr']
-            total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
-            for batch_ind, batch_train_data in enumerate(train_dataloader):
-                t_batch = time.time()
-                z = (2 * len(rel2id) + 1)
-                steps_per_ep = len(train_dataloader)
-                total_steps = hyper_parameters[
-                                  "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
-                current_step = steps_per_ep * ep + batch_ind
-                w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
-                w_rel = min((len(rel2id) / z) * current_step / total_steps,
-                            (len(rel2id) / z))
-                loss_weights = {"ent": w_ent, "rel": w_rel}
-                if config["encoder"] == "BERT":
-                    sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
-                    batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                        batch_input_ids.to(device), batch_attention_mask.to(device),
-                        batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
-                        batch_head_rel_shaking_tag.to(device),
-                        batch_tail_rel_shaking_tag.to(device))
-                elif config["encoder"] in {"BiLSTM", }:
-                    sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
-                    batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                        batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
-                        batch_head_rel_shaking_tag.to(device),
-                        batch_tail_rel_shaking_tag.to(device))
-                # modelf1 forward
-                # zero the parameter gradients
-                optimizer1.zero_grad()
-                if config["encoder"] == "BERT":
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids,
-                        batch_attention_mask,
-                        batch_token_type_ids,
-                    )
-                elif config["encoder"] in {
-                    "BiLSTM",
-                }:
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids)
-
-                optimizer2.zero_grad()
-                if config["encoder"] == "BERT":
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
-                        batch_input_ids,
-                        batch_attention_mask,
-                        batch_token_type_ids,
-                    )
-                elif config["encoder"] in {
-                    "BiLSTM",
-                }:
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
-                        batch_input_ids)
-
-                w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
-                loss1 = w_ent * loss_func1(
-                    ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
-                    head_rel_shaking_outputs,
-                    batch_head_rel_shaking_tag) + w_rel * loss_func1(
-                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-
-                loss2 = w_ent * loss_func2(
-                    ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func2(
-                    head_rel_shaking_outputs,
-                    batch_head_rel_shaking_tag) + w_rel * loss_func2(
-                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-                (loss1.sum() + 0.4 * loss2.sum()).backward()
-                optimizer2.step()
-
-                ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                             batch_ent_shaking_tag)
-                head_rel_sample_acc = metrics.get_sample_accuracy(
-                    head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-                tail_rel_sample_acc = metrics.get_sample_accuracy(
-                    tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-
-                loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
-                ), tail_rel_sample_acc.item()
-                scheduler2.step()
-
-                total_loss += loss1
-                total_ent_sample_acc += ent_sample_acc
-                total_head_rel_sample_acc += head_rel_sample_acc
-                total_tail_rel_sample_acc += tail_rel_sample_acc
-
-                avg_loss = total_loss / (batch_ind + 1)
-                avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
-                avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
-                                                                       1)
-                avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
-                                                                       1)
-
-                batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
-
-                print(batch_print_format.format(
-                    experiment_name,
-                    config["run_name"],
-                    ep + 1,
-                    FIRST_EPOCHS,
-                    batch_ind + 1,
-                    len(train_dataloader),
-                    avg_loss,
-                    avg_ent_sample_acc,
-                    avg_head_rel_sample_acc,
-                    avg_tail_rel_sample_acc,
-                    optimizer2.param_groups[0]['lr'],
-                    time.time() - t_batch,
-                    time.time() - t_ep,
-                ),
-                    end="")
-
-        # -------g2 generate pseudo label---------
-
-        print("g2 generate pseudo label\n")
-
-        modelf2.eval()
-        input_ids = []
-        input_mask = []
-        # labels = []
-        gold_labels=[]
-        e1_pos = []
-        e2_pos = []
-        w = []
-        all_logits = []
-        all_prediction = np.array([])
-        all_ground_truth = np.array([])
-        all_weights = np.array([])
-        all_pseudo_prediction = np.array([])
-        all_pseudo_ground_truth = np.array([])
-        all_pseudo_weights = np.array([])
-        # Evaluate data for one epoch
-        for batch in unlabeled_dataloader[meta_epoch]:  # unlabeled_dataloader
-            # Unpack this training batch from our dataloader.
-            b_input_ids = batch[0].to(device)
-            b_input_mask = batch[1].to(device)
-            b_labels = batch[2].to(device)
-            b_e1_pos = batch[3].to(device)
-            b_e2_pos = batch[4].to(device)
-            b_w = batch[5].to(device)
-
-            with torch.no_grad():
-                # Forward pass, calculate logit predictions.
-                (loss, logits, _) = modelf2(b_input_ids,
-                                         token_type_ids=None,
-                                         attention_mask=b_input_mask,
-                                         labels=b_labels,
-                                         e1_pos=b_e1_pos,
-                                         e2_pos=b_e2_pos,
-                                         w=b_w)
-
-            logits = logits.detach()
-            all_logits.append(logits)
-            input_ids.append(b_input_ids)
-            input_mask.append(b_input_mask)
-            gold_labels.append(b_labels)
-            e1_pos.append(b_e1_pos)
-            e2_pos.append(b_e2_pos)
-            w.append(b_w)
-
-        logits = torch.cat(all_logits, dim=0)
-        probs = F.softmax(logits, dim=1)
-        input_ids = torch.cat(input_ids, dim=0)
-        input_mask = torch.cat(input_mask, dim=0)
-        gold_labels = torch.cat(gold_labels, dim=0)
-        e1_pos = torch.cat(e1_pos, dim=0)
-        e2_pos = torch.cat(e2_pos, dim=0)
-        label_weights, labels = torch.max(probs, dim=1)
-
-        # evaluate generate label quality
-        logits = logits.detach().cpu().numpy()
-        label_ids = gold_labels.to('cpu').numpy()
-        pred_weights = label_weights.to('cpu').numpy()
-        pred_flat = np.argmax(logits, axis=1).flatten()
-        labels_flat = label_ids.flatten()
-        pred_weights = pred_weights.flatten()
-        all_prediction = np.concatenate((all_prediction, pred_flat), axis=None)
-        all_ground_truth = np.concatenate((all_ground_truth, labels_flat), axis=None)
-        all_weights = np.concatenate((all_weights, pred_weights), axis=None)
-
-
-        # Pseudo Label Selection, top Z%
-        sort = torch.argsort(label_weights, descending=True)
-        sort = sort[0:int(len(sort) * Z_RATIO)]
-        input_ids = input_ids[sort]
-        input_mask = input_mask[sort]
-        pseudo_labels = labels[sort]
-        e1_pos = e1_pos[sort]
-        e2_pos = e2_pos[sort]
-        w = label_weights[sort]
-        pseudo_gold_labels = gold_labels[sort]
-
-
-        # evaluate pseudo label quality
-        pred = pseudo_labels.to('cpu').numpy()
-        label_ids = pseudo_gold_labels.to('cpu').numpy()
-        weights = w.to('cpu').numpy()
-        pred_flat = pred.flatten()
-        labels_flat = label_ids.flatten()
-        weights_flat = weights.flatten()
-        all_pseudo_prediction = np.concatenate((all_pseudo_prediction, pred_flat), axis=None)
-        all_pseudo_ground_truth = np.concatenate((all_pseudo_ground_truth, labels_flat), axis=None)
-        all_pseudo_weights = np.concatenate((all_pseudo_weights, weights_flat), axis=None)
-
-        #  evaluate generate label quality
-        np_sort = np.argsort(all_weights)
-        print("  Generate F1 score")
-        score(all_ground_truth, all_prediction,NO_RELATION=NO_relation_index)
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_prediction{}'.format(cnt), all_prediction[np_sort])
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_label{}'.format(cnt), all_ground_truth[np_sort])
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_weights{}'.format(cnt), all_weights[np_sort])
-        #  evaluate pseudo label quality
-        print("  Pseudo F1 score")
-        score(all_pseudo_ground_truth, all_pseudo_prediction,NO_RELATION=NO_relation_index)
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_pseudo_prediction{}'.format(cnt), all_pseudo_prediction)
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_pseudo_label{}'.format(cnt), all_pseudo_ground_truth)
-        np.save(LOG_DIR + '/' + LOG_DIR + '_all_pseudo_weights{}'.format(cnt), all_pseudo_weights)
-        cnt += 1
-
-
-        # update training data
-        train_add_dataset = train_dataloader.dataset + TensorDataset(input_ids, input_mask, pseudo_labels, e1_pos, e2_pos, w)
-        train_dataloader = DataLoader(
-            train_add_dataset,  # The training samples.
-            sampler=RandomSampler(train_add_dataset),  # Select batches randomly
-            batch_size=BATCH_SIZE  # Trains with this batch size.
-        )
-
-    # train f1 with all data
-    max_f1 = -1
-    for ep in range(FIRST_EPOCHS):
-        ## train
-        modelf1.train()
+        print("generate pseudo label\n")
+        Z = 10  # Incremental Epoch Number
+        Z_RATIO = Z / BATCH_SIZE
+        ## valid
+        modelf1.eval()
         t_ep = time.time()
-        start_lr = optimizer1.param_groups[0]['lr']
-        total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
-        for batch_ind, batch_train_data in enumerate(train_dataloader):
-            t_batch = time.time()
-            z = (2 * len(rel2id) + 1)
-            steps_per_ep = len(train_dataloader)
-            total_steps = hyper_parameters[
-                              "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
-            current_step = steps_per_ep * ep + batch_ind
-            w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
-            w_rel = min((len(rel2id) / z) * current_step / total_steps,
-                        (len(rel2id) / z))
-            loss_weights = {"ent": w_ent, "rel": w_rel}
-
+        all_gold_labels = []
+        all_pred_labels = []
+        results = []
+        pseudo_count = 0
+        for batch_ind, batch_valid_data in enumerate(tqdm(unlabeled_dataloader[meta_epoch], desc="Validating")):
             if config["encoder"] == "BERT":
-                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
                 batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
                     batch_input_ids.to(device), batch_attention_mask.to(device),
                     batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
                     batch_head_rel_shaking_tag.to(device),
                     batch_tail_rel_shaking_tag.to(device))
-
             elif config["encoder"] in {
                 "BiLSTM",
             }:
-                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
-
+                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
                 batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
                     batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
                     batch_head_rel_shaking_tag.to(device),
                     batch_tail_rel_shaking_tag.to(device))
-            # modelf1 forward
-            # zero the parameter gradients
-            optimizer1.zero_grad()
 
+            with torch.no_grad():
+                if config["encoder"] == "BERT":
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids,
+                        batch_attention_mask,
+                        batch_token_type_ids,
+                    )
+                elif config["encoder"] in {
+                    "BiLSTM",
+                }:
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids)
+
+            # 得到hand shaking结果
+
+            ## 反思，为啥不用循环呢？
+            # ent_pred_weights, ent_labels = torch.max(ent_shaking_outputs, dim=-1)
+            # ent_sequence_weights=torch.mean(ent_pred_weights,dim=-1)
+            # head_rel_pred_weights, head_labels = torch.max(head_rel_shaking_outputs, dim=-1)
+            # head_rel_sequence_weights=torch.mean(head_rel_pred_weights,dim=-1)
+            # tail_rel_pred_weights, tail_labels = torch.max(tail_rel_shaking_outputs, dim=-1)
+            # tail_rel_sequence_weights=torch.mean(tail_rel_pred_weights,dim=-1)
+            # # Pseudo Label Selection, top Z%
+            # sort = torch.argsort(sequence_weights, descending=True)
+            # sort = sort[0:int(len(sort) * Z_RATIO)]
+            # sort_input=[var[sort] for var in batch_valid_data]
+            # 三个都选按出来以后label的交集呢？因为要考虑到这种时候可能会存在着交集为空集以及变长的每次选择序列数目
+
+            pred_weights = []
+            labels = []
+            sequence_weights = []
+            sort_indexs = []
+            fine_indexs= []
+            model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
+            for shaking_outputs in model_output:
+                pred_weight, label = torch.max(shaking_outputs, dim=-1)
+                pred_weights.append(pred_weight)
+                labels.append(label.to("cpu"))
+                sequence_weight = torch.mean(pred_weight, dim=-1)
+                if len(sequence_weight.shape)==2:
+                    sequence_weight=torch.mean(sequence_weight, dim=-1)
+                sequence_weights.append(sequence_weight)
+                sort_index = torch.argsort(sequence_weight, descending=True)
+                sort_index = sort_index[0:int(len(sort_index) * Z_RATIO)]
+                fine_index = sort_index[0:int(len(sort_index) * Z_RATIO)//2]
+                sort_indexs.append(set(sort_index.tolist()))
+                fine_indexs.append(set(fine_index.tolist()))
+            inter_index = set()
+            for i in sort_indexs[1:2]:#注意这里分数暂时只考虑了三元组的
+                inter_index = inter_index & i
+            if len(inter_index) <= (sequence_weight.shape[0] * Z_RATIO) // 3:
+                # entity\head\rel的分数综合考虑
+                # # Pseudo Label Selection, top Z%
+                final_sequence_weight = sum(sequence_weights)
+                final_sort = torch.argsort(final_sequence_weight, descending=True)
+                final_sort = final_sort[0:int(len(final_sort) * Z_RATIO) if int(len(final_sort) * Z_RATIO)>0 else 1]
+                inter_index = final_sort
+            sort_input=[]
+            for var in batch_valid_data:
+                if isinstance(var, torch.Tensor):
+                    sort_input.append(var[inter_index])
+                elif isinstance(var, list):
+                    sort_input.append([var[i] for i in inter_index])
+                else:
+                    raise Exception
+            model_output=[var[inter_index].to("cpu") for var in model_output]
+            gold_labels = sort_input[-3:]
+            pseudo_labels = [label[inter_index] for label in labels]
+            pseudo_count += len(inter_index)
+            for i in range(3):
+                results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]))
+            print("pseudo label acc is:{}".format(np.mean(results)))
+            # pred_id = torch.argmax(pred, dim=-1)
+            # # (batch_size, ..., seq_len) -> (batch_size, )，把每个sample压成一条seq
+            # pred_id = pred_id.view(pred_id.size()[0], -1)
+            # update training data
+            pseudo_data_list.append((sort_input[:-3] + pseudo_labels))
+
+
+
+
+            # 给标记成合适的数据格式
+
+            # 数据筛选(三个维度应采用一个指标筛选进来)
+
+        log_dict = {
+                    "use pseudo number": pseudo_count,
+                    "pseudo acc":np.mean(results),
+                   "time": time.time() - t_ep,
+        }
+        logger.log(log_dict)
+        pprint(log_dict)
+
+    # # train f1 with all data
+    #     max_f1 = -1
+    #     for ep in range(FIRST_EPOCHS):
+    #         ## train
+    #         modelf1.train()
+    #         t_ep = time.time()
+    #         start_lr = optimizer1.param_groups[0]['lr']
+    #         total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+    #         for batch_ind, batch_train_data in enumerate(train_dataloader):
+    #             t_batch = time.time()
+    #             z = (2 * len(rel2id) + 1)
+    #             steps_per_ep = len(train_dataloader)
+    #             total_steps = hyper_parameters[
+    #                               "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+    #             current_step = steps_per_ep * ep + batch_ind
+    #             w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
+    #             w_rel = min((len(rel2id) / z) * current_step / total_steps,
+    #                         (len(rel2id) / z))
+    #             loss_weights = {"ent": w_ent, "rel": w_rel}
+    #
+    #             if config["encoder"] == "BERT":
+    #                 sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+    #                 batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+    #                     batch_input_ids.to(device), batch_attention_mask.to(device),
+    #                     batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+    #                     batch_head_rel_shaking_tag.to(device),
+    #                     batch_tail_rel_shaking_tag.to(device))
+    #
+    #             elif config["encoder"] in {
+    #                 "BiLSTM",
+    #             }:
+    #                 sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+    #
+    #                 batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+    #                     batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+    #                     batch_head_rel_shaking_tag.to(device),
+    #                     batch_tail_rel_shaking_tag.to(device))
+    #             # modelf1 forward
+    #             # zero the parameter gradients
+    #             optimizer1.zero_grad()
+    #
+    #             if config["encoder"] == "BERT":
+    #                 ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+    #                     batch_input_ids,
+    #                     batch_attention_mask,
+    #                     batch_token_type_ids,
+    #                 )
+    #             elif config["encoder"] in {
+    #                 "BiLSTM",
+    #             }:
+    #                 ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+    #                     batch_input_ids)
+    #
+    #             w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
+    #             loss1 = w_ent * loss_func1(
+    #                 ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
+    #                 head_rel_shaking_outputs,
+    #                 batch_head_rel_shaking_tag) + w_rel * loss_func1(
+    #                 tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+    #
+    #             loss1.backward()
+    #             optimizer1.step()
+    #
+    #             ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+    #                                                          batch_ent_shaking_tag)
+    #             head_rel_sample_acc = metrics.get_sample_accuracy(
+    #                 head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+    #             tail_rel_sample_acc = metrics.get_sample_accuracy(
+    #                 tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+    #
+    #             loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
+    #             ), tail_rel_sample_acc.item()
+    #             scheduler1.step()
+    #
+    #             total_loss += loss1
+    #             total_ent_sample_acc += ent_sample_acc
+    #             total_head_rel_sample_acc += head_rel_sample_acc
+    #             total_tail_rel_sample_acc += tail_rel_sample_acc
+    #
+    #             avg_loss = total_loss / (batch_ind + 1)
+    #             avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
+    #             avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
+    #                                                                    1)
+    #             avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
+    #                                                                    1)
+    #
+    #             batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
+    #
+    #             print(batch_print_format.format(
+    #                 experiment_name,
+    #                 config["run_name"],
+    #                 ep + 1,
+    #                 FIRST_EPOCHS,
+    #                 batch_ind + 1,
+    #                 len(train_dataloader),
+    #                 avg_loss,
+    #                 avg_ent_sample_acc,
+    #                 avg_head_rel_sample_acc,
+    #                 avg_tail_rel_sample_acc,
+    #                 optimizer1.param_groups[0]['lr'],
+    #                 time.time() - t_batch,
+    #                 time.time() - t_ep,
+    #             ),
+    #                 end="")
+    #
+    #             if config["logger"] == "wandb" and batch_ind % hyper_parameters[
+    #                 "log_interval"] == 0:
+    #                 logger.log({
+    #                     "train_loss": avg_loss,
+    #                     "train_ent_seq_acc": avg_ent_sample_acc,
+    #                     "train_head_rel_acc": avg_head_rel_sample_acc,
+    #                     "train_tail_rel_acc": avg_tail_rel_sample_acc,
+    #                     "learning_rate": optimizer1.param_groups[0]['lr'],
+    #                     "time": time.time() - t_ep,
+    #                 })
+    #
+    #         if config[
+    #             "logger"] != "wandb":  # only log once for training if logger is not wandb
+    #             logger.log({
+    #                 "train_loss": avg_loss,
+    #                 "train_ent_seq_acc": avg_ent_sample_acc,
+    #                 "train_head_rel_acc": avg_head_rel_sample_acc,
+    #                 "train_tail_rel_acc": avg_tail_rel_sample_acc,
+    #                 "learning_rate": optimizer1.param_groups[0]['lr'],
+    #                 "time": time.time() - t_ep,
+    #             })
+    #
+    #         ## valid
+    #         modelf1.eval()
+    #         t_ep = time.time()
+    #         total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+    #         total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+    #         for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+    #             ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg = valid_step(
+    #                 modelf1, batch_valid_data)
+    #
+    #             total_ent_sample_acc += ent_sample_acc
+    #             total_head_rel_sample_acc += head_rel_sample_acc
+    #             total_tail_rel_sample_acc += tail_rel_sample_acc
+    #
+    #             total_rel_correct_num += rel_cpg[0]
+    #             total_rel_pred_num += rel_cpg[1]
+    #             total_rel_gold_num += rel_cpg[2]
+    #
+    #         avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+    #         avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+    #         avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+    #
+    #
+    #
+    #         log_dict = {
+    #             "val_ent_seq_acc": avg_ent_sample_acc,
+    #             "val_head_rel_acc": avg_head_rel_sample_acc,
+    #             "val_tail_rel_acc": avg_tail_rel_sample_acc,
+    #             "time": time.time() - t_ep,
+    #         }
+    #         logger.log(log_dict)
+    #         pprint(log_dict)
+    #
+    #
+    #         ## save when better
+    #         # if valid_f1 >= max_f1:
+    #         #     max_f1 = valid_f1
+    #         #     if valid_f1 > config["f1_2_save"]:  # save the best model
+    #         #         modle_state_num = len(
+    #         #             glob.glob(model_state_dict_dir + "/model_state_dict_*.pt"))
+    #         #         torch.save(
+    #         #             model.state_dict(),
+    #         #             os.path.join(
+    #         #                 model_state_dict_dir,
+    #         #                 "model_state_dict_{}.pt".format(modle_state_num)))
+    #
+    #         # save best
+    #         if valid_f1 >= max_f1:
+    #             max_f1 = valid_f1
+    #             if valid_f1 > config["f1_2_save"]:  # save the best model
+    #                 torch.save(
+    #                     modelf1.state_dict(),
+    #                     os.path.join(
+    #                         model_state_dict_dir,
+    #                         "model_state_dict_best.pt"))
+    #     #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
+    #     #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
+    #
+    del pseudo_data_list
+    ## valid
+    modelf1.eval()
+    t_ep = time.time()
+    total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+    total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+    for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+        if config["encoder"] == "BERT":
+            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_attention_mask.to(device),
+                batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        elif config["encoder"] in {
+            "BiLSTM",
+        }:
+            sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        with torch.no_grad():
             if config["encoder"] == "BERT":
                 ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
                     batch_input_ids,
@@ -1058,250 +1205,55 @@ for total_epoch in range(TOTAL_EPOCHS):
             elif config["encoder"] in {
                 "BiLSTM",
             }:
-                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
                     batch_input_ids)
 
-            w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
-            loss1 = w_ent * loss_func1(
-                ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
-                head_rel_shaking_outputs,
-                batch_head_rel_shaking_tag) + w_rel * loss_func1(
-                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+        ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                     batch_ent_shaking_tag)
+        head_rel_sample_acc = metrics.get_sample_accuracy(
+            head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+        tail_rel_sample_acc = metrics.get_sample_accuracy(
+            tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
 
-            loss1.backward()
-            optimizer1.step()
+        rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
+                                      ent_shaking_outputs,
+                                      head_rel_shaking_outputs,
+                                      tail_rel_shaking_outputs,
+                                      hyper_parameters["match_pattern"])
 
-            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                         batch_ent_shaking_tag)
-            head_rel_sample_acc = metrics.get_sample_accuracy(
-                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-            tail_rel_sample_acc = metrics.get_sample_accuracy(
-                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-
-            loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
-            ), tail_rel_sample_acc.item()
-            scheduler1.step()
-
-            total_loss += loss1
-            total_ent_sample_acc += ent_sample_acc
-            total_head_rel_sample_acc += head_rel_sample_acc
-            total_tail_rel_sample_acc += tail_rel_sample_acc
-
-            avg_loss = total_loss / (batch_ind + 1)
-            avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
-            avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
-                                                                   1)
-            avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
-                                                                   1)
-
-            batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
-
-            print(batch_print_format.format(
-                experiment_name,
-                config["run_name"],
-                ep + 1,
-                FIRST_EPOCHS,
-                batch_ind + 1,
-                len(train_dataloader),
-                avg_loss,
-                avg_ent_sample_acc,
-                avg_head_rel_sample_acc,
-                avg_tail_rel_sample_acc,
-                optimizer1.param_groups[0]['lr'],
-                time.time() - t_batch,
-                time.time() - t_ep,
-            ),
-                end="")
-
-            if config["logger"] == "wandb" and batch_ind % hyper_parameters[
-                "log_interval"] == 0:
-                logger.log({
-                    "train_loss": avg_loss,
-                    "train_ent_seq_acc": avg_ent_sample_acc,
-                    "train_head_rel_acc": avg_head_rel_sample_acc,
-                    "train_tail_rel_acc": avg_tail_rel_sample_acc,
-                    "learning_rate": optimizer1.param_groups[0]['lr'],
-                    "time": time.time() - t_ep,
-                })
-
-        if config[
-            "logger"] != "wandb":  # only log once for training if logger is not wandb
-            logger.log({
-                "train_loss": avg_loss,
-                "train_ent_seq_acc": avg_ent_sample_acc,
-                "train_head_rel_acc": avg_head_rel_sample_acc,
-                "train_tail_rel_acc": avg_tail_rel_sample_acc,
-                "learning_rate": optimizer1.param_groups[0]['lr'],
-                "time": time.time() - t_ep,
-            })
-
-        ## valid
-        modelf1.eval()
-        t_ep = time.time()
-        total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
-        total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
-        for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
-            ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg = valid_step(
-                modelf1, batch_valid_data)
-
-            total_ent_sample_acc += ent_sample_acc
-            total_head_rel_sample_acc += head_rel_sample_acc
-            total_tail_rel_sample_acc += tail_rel_sample_acc
-
-            total_rel_correct_num += rel_cpg[0]
-            total_rel_pred_num += rel_cpg[1]
-            total_rel_gold_num += rel_cpg[2]
-
-        avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
-        avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
-        avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
-
-        rel_prf = metrics.get_prf_scores(total_rel_correct_num,
-                                         total_rel_pred_num,
-                                         total_rel_gold_num)
-
-        log_dict = {
-            "val_ent_seq_acc": avg_ent_sample_acc,
-            "val_head_rel_acc": avg_head_rel_sample_acc,
-            "val_tail_rel_acc": avg_tail_rel_sample_acc,
-            "val_prec": rel_prf[0],
-            "val_recall": rel_prf[1],
-            "val_f1": rel_prf[2],
-            "time": time.time() - t_ep,
-        }
-        logger.log(log_dict)
-        pprint(log_dict)
-
-        valid_f1 = rel_prf[2]
-
-        ## save when better
-        # if valid_f1 >= max_f1:
-        #     max_f1 = valid_f1
-        #     if valid_f1 > config["f1_2_save"]:  # save the best model
-        #         modle_state_num = len(
-        #             glob.glob(model_state_dict_dir + "/model_state_dict_*.pt"))
-        #         torch.save(
-        #             model.state_dict(),
-        #             os.path.join(
-        #                 model_state_dict_dir,
-        #                 "model_state_dict_{}.pt".format(modle_state_num)))
-
-        # save best
-        if valid_f1 >= max_f1:
-            max_f1 = valid_f1
-            if valid_f1 > config["f1_2_save"]:  # save the best model
-                torch.save(
-                    modelf1.state_dict(),
-                    os.path.join(
-                        model_state_dict_dir,
-                        "model_state_dict_best.pt"))
-    #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
-    #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
-
-    # for epoch_i in range(0, EPOCHS):
-    #     print('---Last Train Epoch {:} / {:} ---'.format(epoch_i + 1, EPOCHS))
-    #     # Measure how long the training epoch takes.
-    #     t0 = time.time()
-    #
-    #     # Reset the total loss for this epoch.
-    #     total_train_loss = 0
-    #     # Put the model into training mode
-    #     modelf1.train()
-    #
-    #     for step, batch in enumerate(train_dataloader):
-    #         # Progress update every 40 batches.
-    #         if step % 40 == 0 and not step == 0:
-    #             # Calculate elapsed time in minutes.
-    #             elapsed = format_time(time.time() - t0)
-    #         # Unpack this training batch from our dataloader.
-    #         b_input_ids = batch[0].to(device)
-    #         b_input_mask = batch[1].to(device)
-    #         b_labels = batch[2].to(device)
-    #         b_e1_pos = batch[3].to(device)
-    #         b_e2_pos = batch[4].to(device)
-    #         b_w = batch[5].to(device)
-    #         modelf1.zero_grad()
-    #         # Perform a forward pass (evaluate the model on this training batch)
-    #         loss, logits, _ = modelf1(b_input_ids,
-    #                                token_type_ids=None,
-    #                                attention_mask=b_input_mask,
-    #                                labels=b_labels,
-    #                                e1_pos=b_e1_pos,
-    #                                e2_pos=b_e2_pos,
-    #                                w=b_w)
-    #
-    #         # Accumulate the training loss over all of the batches
-    #         total_train_loss += loss.sum().item()
-    #         # Perform a backward pass to calculate the gradients.
-    #         loss.sum().backward()
-    #         # Clip the norm of the gradients to 1.0 to prevent exploding gradients problem.
-    #         torch.nn.utils.clip_grad_norm_(modelf1.parameters(), 1.0)
-    #         # Update parameters and take a step using the computed gradient
-    #         optimizer1.step()
-    #         # Update the learning rate.
-    #         scheduler1.step()
-    #     # Calculate the average loss over all of the batches.
-    #     avg_train_loss = total_train_loss / len(train_dataloader)
-    #     # Measure how long this epoch took.
-    #     training_time = format_time(time.time() - t0)
-    #     print(" f1 Average training loss: {0:.4f}".format(avg_train_loss))
-    #     # print(" f1 Training epcoh took: {:}".format(training_time))
-    #
-    #  # final f1 validation
-    # print("final validation start...\n")
-    # t0 = time.time()
-    #
-    # # Put the model in evaluation mode--the dropout layers behave differently during evaluation.
-    # modelf1.eval()
-    #
-    # # Tracking variables
-    # total_eval_accuracy = 0
-    # total_eval_loss = 0
-    # nb_eval_steps = 0
-    #
-    # all_prediction = np.array([])
-    # all_ground_truth = np.array([])
-    #
-    # # Evaluate data for one epoch
-    # for batch in validation_dataloader:
-    #     # Unpack this training batch from our dataloader.
-    #     b_input_ids = batch[0].to(device)
-    #     b_input_mask = batch[1].to(device)
-    #     b_labels = batch[2].to(device)
-    #     b_e1_pos = batch[3].to(device)
-    #     b_e2_pos = batch[4].to(device)
-    #     b_w = batch[5].to(device)
-    #
-    #     with torch.no_grad():
-    #         # Forward pass, calculate logit predictions.
-    #         (loss, logits, _) = modelf1(b_input_ids,
-    #                                  token_type_ids=None,
-    #                                  attention_mask=b_input_mask,
-    #                                  labels=b_labels,
-    #                                  e1_pos=b_e1_pos,
-    #                                  e2_pos=b_e2_pos,
-    #                                  w=b_w)
-    #
-    #     # Accumulate the validation loss.
-    #     total_eval_loss += loss.sum().item()
-    #     # Move logits and labels to CPU
-    #     logits = logits.detach().cpu().numpy()
-    #     label_ids = b_labels.to('cpu').numpy()
-    #     pred_flat = np.argmax(logits, axis=1).flatten()
-    #     labels_flat = label_ids.flatten()
-    #     all_prediction = np.concatenate((all_prediction, pred_flat), axis=None)
-    #     all_ground_truth = np.concatenate((all_ground_truth, labels_flat), axis=None)
+        ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg =  ent_sample_acc.item(), head_rel_sample_acc.item(
+        ), tail_rel_sample_acc.item(), rel_cpg
 
 
-    # # Calculate the average loss over all of the batches.
-    # avg_val_loss = total_eval_loss / len(validation_dataloader)
-    #
-    # validation_time = format_time(time.time() - t0)
-    # non_zero_idx = (all_ground_truth != 0)
-    # validation_acc = np.sum(all_prediction[non_zero_idx] == all_ground_truth[non_zero_idx]) / len(all_ground_truth[non_zero_idx])
-    # validation_f1_score = f1_score(all_ground_truth[non_zero_idx], all_prediction[non_zero_idx], average="micro")
-    # print(f"Final validation score:\n acc:{validation_acc:.4f}, micro-f1:{validation_f1_score:.4f}")
-    # score(all_ground_truth, all_prediction,verbose=True,NO_RELATION=NO_relation_index)
+        total_ent_sample_acc += ent_sample_acc
+        total_head_rel_sample_acc += head_rel_sample_acc
+        total_tail_rel_sample_acc += tail_rel_sample_acc
+
+        total_rel_correct_num += rel_cpg[0]
+        total_rel_pred_num += rel_cpg[1]
+        total_rel_gold_num += rel_cpg[2]
+
+    avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+    avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+    avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+
+    rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+                                     total_rel_pred_num,
+                                     total_rel_gold_num)
+
+    log_dict = {
+        "val_ent_seq_acc": avg_ent_sample_acc,
+        "val_head_rel_acc": avg_head_rel_sample_acc,
+        "val_tail_rel_acc": avg_tail_rel_sample_acc,
+        "val_prec": rel_prf[0],
+        "val_recall": rel_prf[1],
+        "val_f1": rel_prf[2],
+        "time": time.time() - t_ep,
+    }
+    logger.log(log_dict)
+    pprint(log_dict)
+
+    valid_f1 = rel_prf[2]
 
 # ----------------------training complete-----------------------
 
