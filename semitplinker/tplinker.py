@@ -7,6 +7,7 @@ import json
 from torch.nn.parameter import Parameter
 from common.components import HandshakingKernel
 import math
+import numpy as np
 
 class HandshakingTaggingScheme(object):
     """docstring for HandshakingTaggingScheme"""
@@ -304,21 +305,29 @@ class DataMaker4Bert():
         ent_spots_list = []
         head_rel_spots_list = []
         tail_rel_spots_list = []
-
-        for tp in batch_data:
+        count_old_list=[]
+        count_new_list = []
+        ent_new_handshaking=[]
+        head_new_handshaking = []
+        tail_new_handshaking = []
+        for i,tp in enumerate(batch_data):
             sample_list.append(tp[0])
             input_ids_list.append(tp[1])
-            attention_mask_list.append(tp[2])        
+            attention_mask_list.append(tp[2])   
             token_type_ids_list.append(tp[3])        
             tok2char_span_list.append(tp[4])
             try:
-                batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag=tp[6]
+                ent_new_handshaking.append(tp[6])   # bert这个数字为6,7,8;lstm为4，5，6
+                head_new_handshaking.append(tp[7])
+                tail_new_handshaking.append(tp[8])
             except:
-                sign_for_not_pesudo=True
+                sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
             else:
-                sign_for_not_pesudo=False
+                count_new_list.append(i)
+                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
             if sign_for_not_pesudo and data_type != "test":
                 ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[5]
+                count_old_list.append(i)
                 ent_spots_list.append(ent_matrix_spots)
                 head_rel_spots_list.append(head_rel_matrix_spots)
                 tail_rel_spots_list.append(tail_rel_matrix_spots)
@@ -329,17 +338,30 @@ class DataMaker4Bert():
         batch_input_ids = torch.stack(input_ids_list, dim = 0)
         batch_attention_mask = torch.stack(attention_mask_list, dim = 0)
         batch_token_type_ids = torch.stack(token_type_ids_list, dim = 0)
-        
-        batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = None, None, None
-        if sign_for_not_pesudo and data_type != "test":
-            batch_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
-            batch_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
-            batch_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
 
 
+        old_ent_shaking_tag, old_head_rel_shaking_tag, old_tail_rel_shaking_tag = None, None, None
+        if len(count_old_list)>0 and data_type != "test":
+            old_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
+            old_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
+            old_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
+        if len(count_new_list)>0:
+            sort_index=np.argsort(count_old_list+count_new_list)
+            if len(count_old_list)>0:
+                batch_ent_shaking_tag=torch.cat([old_ent_shaking_tag,torch.stack(ent_new_handshaking,dim=0)],dim=0)[sort_index]
+                batch_head_rel_shaking_tag=torch.cat([old_head_rel_shaking_tag,torch.stack(head_new_handshaking,dim=0)],dim=0)[sort_index]
+                batch_tail_rel_shaking_tag=torch.cat([old_tail_rel_shaking_tag,torch.stack(tail_new_handshaking,dim=0)],dim=0)[sort_index]
+            else:
+                batch_ent_shaking_tag = torch.stack(ent_new_handshaking, dim=0)[sort_index]
+                batch_head_rel_shaking_tag = torch.stack(head_new_handshaking, dim=0)[sort_index]
+                batch_tail_rel_shaking_tag = torch.stack(tail_new_handshaking, dim=0)[sort_index]
+
+        else:
+            batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag=old_ent_shaking_tag,old_head_rel_shaking_tag,old_tail_rel_shaking_tag
         return sample_list, \
               batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, \
                 batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+
 
 
 
@@ -676,4 +698,4 @@ class MetricsCalculator():
         precision = correct_num / (pred_num + minimini)
         recall = correct_num / (gold_num + minimini)
         f1 = 2 * precision * recall / (precision + recall + minimini)
-        return precision, recall, f1
+        return  precision, recall, f1

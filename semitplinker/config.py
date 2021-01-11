@@ -20,8 +20,8 @@ common["run_name"] = "{}+{}+{}".format("TP1", common["hyper_parameters"]["shakin
 
 run_id = ''.join(random.sample(string.ascii_letters + string.digits, 8))
 train_config = {
-    "train_data": "train_data-sample.json",
-    "valid_data": "valid_data-sample.json",
+    "train_data": "train_data.json",
+    "valid_data": "valid_data.json",
     "rel2id": "rel2id.json",
     #"logger": "wandb", # if wandb, comment the following four lines
     

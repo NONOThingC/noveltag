@@ -523,10 +523,18 @@ def stratified_sample(dataset, ratio):
     return [Subset(dataset, sampled_indices), Subset(dataset, rest_indices)]
 
 
-
 # parameters
+# 测试参数
+# BATCH_SIZE=32
+# LABEL_OF_TRAIN = 0.4  # Label ratio
+# FIRST_EPOCHS=2
+# TOTAL_EPOCHS = 1
+# MATE_EPOCHS = 2
+# seed_val = 19
+# LAMBD = 0.2
+# 正常参数
 BATCH_SIZE=32
-LABEL_OF_TRAIN = 0.2  # Label ratio
+LABEL_OF_TRAIN = 0.4  # Label ratio
 FIRST_EPOCHS=10
 TOTAL_EPOCHS = 1
 MATE_EPOCHS = 4
@@ -573,25 +581,16 @@ valid_dataloader = DataLoader(
     collate_fn=data_maker.generate_batch,
 )
 # build
-pseudo_data_list=None
-def get_pseudo_data(data_list):
-    if data_list is not None:
-        for batch_data in data_list:
-             yield batch_data
-    else:
-        return None
+def batch2dataset(*args):
+    """
+    将batch数据解析成需要的格式
+    (sample,input_ids,attention_mask,token_type_ids,tok2char_span,spots_tuple,)
+    """
+    a = []
+    for i in zip(*args):
+        a.append(i)
+    return a
 
-# def get_pseudo_data(data_list):
-#     batch_data=[]
-#     if data_list is not None:
-#         for i,data in enumerate(data_list):
-#             batch_data.append((data))
-#             if not (i+1)%(batch_size+1):
-#                 yield batch_data
-#                 batch_data=[]
-#         yield batch_data
-#     else:
-#         return None
 print("training start...\n")
 cnt = 0
 """
@@ -619,7 +618,6 @@ for total_epoch in range(TOTAL_EPOCHS):
             t_ep = time.time()
             start_lr = optimizer1.param_groups[0]['lr']
             total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
-            pseudo_iter = get_pseudo_data(pseudo_data_list)
             for batch_ind, batch_train_data in enumerate(train_dataloader):
                 t_batch = time.time()
                 z = (2 * len(rel2id) + 1)
@@ -650,22 +648,7 @@ for total_epoch in range(TOTAL_EPOCHS):
                         batch_head_rel_shaking_tag.to(device),
                         batch_tail_rel_shaking_tag.to(device))
                 ## concat pseudo training data
-                try:
-                    pseudo_data=next(pseudo_iter)
-                except:
-                    pseudo_data=[]
-                batch_train_data_new = []
-                for var1,var2 in zip(batch_train_data,pseudo_data):
-                    if isinstance(var2, torch.Tensor):
-                        batch_train_data_new.append(torch.cat([var1,var2],dim=0))
-                    elif isinstance(var2, list):
-                        batch_train_data_new.append(var1.extend(var2))
-                    elif var2 is None:
-                        pass
-                    else:
-                        raise Exception
-                if len(batch_train_data_new):
-                    batch_train_data=batch_train_data_new
+
                 # modelf1 forward
                 # zero the parameter gradients
                 optimizer1.zero_grad()
@@ -864,7 +847,7 @@ for total_epoch in range(TOTAL_EPOCHS):
         #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
         #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
         # -------generate pseudo label---------
-
+        train_dataloader =  DataLoader(labeled_dataset,batch_size=hyper_parameters["batch_size"],shuffle=True,num_workers=4,drop_last=False,collate_fn=data_maker.generate_batch,)# every time reset dataset and shuffle
         print("generate pseudo label\n")
         Z = 10  # Incremental Epoch Number
         Z_RATIO = Z / BATCH_SIZE
@@ -963,16 +946,22 @@ for total_epoch in range(TOTAL_EPOCHS):
             pseudo_count += len(inter_index)
             for i in range(3):
                 results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]))
-            print("pseudo label acc is:{}".format(np.mean(results)))
+            print("Pseudo label acc is:{}".format(np.mean(results)))
             # pred_id = torch.argmax(pred, dim=-1)
             # # (batch_size, ..., seq_len) -> (batch_size, )，把每个sample压成一条seq
             # pred_id = pred_id.view(pred_id.size()[0], -1)
             # update training data
-            pseudo_data_list.append((sort_input[:-3] + pseudo_labels))
 
-
-
-
+            batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
+            train_add_dataset = train_dataloader.dataset + MyDataset(batch_new_data)
+            train_dataloader = DataLoader(
+                train_add_dataset,  # The training samples.
+                batch_size=hyper_parameters["batch_size"],
+                shuffle=False,
+                num_workers=1,
+                drop_last=False,
+                collate_fn=data_maker.generate_batch,
+            )
             # 给标记成合适的数据格式
 
             # 数据筛选(三个维度应采用一个指标筛选进来)
