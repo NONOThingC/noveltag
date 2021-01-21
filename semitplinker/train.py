@@ -36,7 +36,7 @@ from torch.utils.data import TensorDataset, random_split, Subset
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from sklearn.metrics import f1_score
 from collections import Counter
-
+import sys
 import pickle
 
 # In[ ]:
@@ -48,6 +48,7 @@ import pickle
 # config = yaml.load(open("train_config.yaml", "r"), Loader = yaml.FullLoader)
 
 # Setting
+sys.setrecursionlimit(10000)
 config = config.train_config
 hyper_parameters = config["hyper_parameters"]
 # Gpu set
@@ -246,7 +247,7 @@ train_dataloader = DataLoader(
     MyDataset(indexed_train_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=4,
+    num_workers=0,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -254,7 +255,7 @@ valid_dataloader = DataLoader(
     MyDataset(indexed_valid_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=4,
+    num_workers=0,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -534,8 +535,8 @@ def stratified_sample(dataset, ratio):
 # LAMBD = 0.2
 # 正常参数
 BATCH_SIZE=32
-LABEL_OF_TRAIN = 0.4  # Label ratio
-FIRST_EPOCHS=10
+LABEL_OF_TRAIN = 0.1  # Label ratio
+FIRST_EPOCHS=8
 TOTAL_EPOCHS = 1
 MATE_EPOCHS = 4
 seed_val = 19
@@ -554,7 +555,7 @@ labeled_dataloader = DataLoader(
     labeled_dataset,
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=4,
+    num_workers=0,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -565,7 +566,7 @@ for i in range(MATE_EPOCHS):
         unlabeled_dataset[i],  # The training samples.
         batch_size=hyper_parameters["batch_size"],
         shuffle=True,
-        num_workers=4,
+        num_workers=0,
         drop_last=False,
         collate_fn=data_maker.generate_batch,
     )
@@ -576,7 +577,7 @@ valid_dataloader = DataLoader(
     MyDataset(indexed_valid_data),
     batch_size=hyper_parameters["batch_size"],
     shuffle=True,
-    num_workers=4,
+    num_workers=0,
     drop_last=False,
     collate_fn=data_maker.generate_batch,
 )
@@ -622,8 +623,7 @@ for total_epoch in range(TOTAL_EPOCHS):
                 t_batch = time.time()
                 z = (2 * len(rel2id) + 1)
                 steps_per_ep = len(train_dataloader)
-                total_steps = hyper_parameters[
-                                  "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+                total_steps = hyper_parameters[ "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
                 current_step = steps_per_ep * ep + batch_ind
                 w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
                 w_rel = min((len(rel2id) / z) * current_step / total_steps,
@@ -847,7 +847,7 @@ for total_epoch in range(TOTAL_EPOCHS):
         #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
         #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
         # -------generate pseudo label---------
-        train_dataloader =  DataLoader(labeled_dataset,batch_size=hyper_parameters["batch_size"],shuffle=True,num_workers=4,drop_last=False,collate_fn=data_maker.generate_batch,)# every time reset dataset and shuffle
+        #
         print("generate pseudo label\n")
         Z = 10  # Incremental Epoch Number
         Z_RATIO = Z / BATCH_SIZE
@@ -957,8 +957,8 @@ for total_epoch in range(TOTAL_EPOCHS):
             train_dataloader = DataLoader(
                 train_add_dataset,  # The training samples.
                 batch_size=hyper_parameters["batch_size"],
-                shuffle=False,
-                num_workers=1,
+                shuffle=True,
+                num_workers=0,
                 drop_last=False,
                 collate_fn=data_maker.generate_batch,
             )
