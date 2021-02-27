@@ -510,15 +510,20 @@ def stratified_sample(dataset, ratio):
     for i in range(len(dataset)):
         j=dataset[i][-1][1]#只能按照一个来看，否则采样算法必须更复杂
         if len(j) != 0:
-            rel_id=j[0][0]
-            data_dict[rel_id].append(i)# data_dict[label]+=train_index
+            rel_record=[]
+            for every_rel_ins in j:
+                rel_id=every_rel_ins[0]
+                if rel_id not in rel_record:
+                    data_dict[rel_id].append(i)# data_dict[label]+=train_index
+                    rel_record.append(rel_id)
         else:
             data_dict[-1].append(i)
+
     sampled_indices = []
     rest_indices = []
     for indices in data_dict.values():
         random.shuffle(indices)
-        index=int(len(indices) * ratio)
+        index=int(len(indices) * ratio+1)
         sampled_indices += indices[:index]
         rest_indices += indices[index:]
     return [Subset(dataset, sampled_indices), Subset(dataset, rest_indices)]
@@ -535,10 +540,10 @@ def stratified_sample(dataset, ratio):
 # LAMBD = 0.2
 # 正常参数
 BATCH_SIZE=32
-LABEL_OF_TRAIN = 0.1  # Label ratio
+LABEL_OF_TRAIN = 0.2  # Label ratio
 FIRST_EPOCHS=8
 TOTAL_EPOCHS = 1
-MATE_EPOCHS = 4
+MATE_EPOCHS = 5
 seed_val = 19
 LAMBD = 0.2
 # stratified data
@@ -565,7 +570,7 @@ for i in range(MATE_EPOCHS):
     unlabeled_dataloader_now = DataLoader(
         unlabeled_dataset[i],  # The training samples.
         batch_size=hyper_parameters["batch_size"],
-        shuffle=True,
+        shuffle=False,
         num_workers=0,
         drop_last=False,
         collate_fn=data_maker.generate_batch,
@@ -609,7 +614,6 @@ for total_epoch in range(TOTAL_EPOCHS):
     print(f"Total epoch{total_epoch}:\n")
 
     for meta_epoch in range(MATE_EPOCHS):
-        # -------load pseudo---------
         # -------train f1---------
         print(f"Mate epoch{meta_epoch}:\n")
         max_f1 = -1
@@ -846,10 +850,11 @@ for total_epoch in range(TOTAL_EPOCHS):
             #                 "model_state_dict_best.pt"))
         #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
         #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
+        # -------train f1 end---------
         # -------generate pseudo label---------
         #
         print("generate pseudo label\n")
-        Z = 10  # Incremental Epoch Number
+        Z = 16  # Incremental Epoch Number
         Z_RATIO = Z / BATCH_SIZE
         ## valid
         modelf1.eval()
@@ -963,7 +968,6 @@ for total_epoch in range(TOTAL_EPOCHS):
                 collate_fn=data_maker.generate_batch,
             )
             # 给标记成合适的数据格式
-
             # 数据筛选(三个维度应采用一个指标筛选进来)
 
         log_dict = {
