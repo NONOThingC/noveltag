@@ -47,8 +47,8 @@ class HandshakingTaggingScheme(object):
 
     def get_spots(self, sample):
         '''
-        entity spot and tail_rel spot: (span_pos1, span_pos2, ent_tag_id)
-        head_rel spot: (rel_id, head_span_pos1, head_span_pos2, head_rel_tagschema_id)
+        entity spot : (span_pos1, span_pos2, ent_tag_id)
+        head_rel and tail_rel  spot: (rel_id, head_span_pos1, head_span_pos2, head_rel_tagschema_id)
         '''
         ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = [], [], [] 
 
@@ -365,6 +365,8 @@ class DataMaker4Bert():
 
 
 
+
+
 class DataMaker4BiLSTM():
     def __init__(self, text2indices, get_tok2char_span_map, handshaking_tagger):
         self.text2indices = text2indices
@@ -656,7 +658,7 @@ class MetricsCalculator():
 
         correct_num, pred_num, gold_num = 0, 0, 0
         for ind in range(len(sample_list)):
-            sample = sample_list[ind]
+            sample = sample_list[ind]#它存了所有sample
             text = sample["text"]
             tok2char_span = tok2char_span_list[ind]
             pred_ent_shaking_tag = batch_pred_ent_shaking_tag[ind]
