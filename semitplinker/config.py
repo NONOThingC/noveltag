@@ -20,8 +20,8 @@ common["run_name"] = "{}+{}+{}".format("TP1", common["hyper_parameters"]["shakin
 
 run_id = ''.join(random.sample(string.ascii_letters + string.digits, 8))
 train_config = {
-    "train_data": "train_data-sample.json",
-    "valid_data": "valid_data-sample.json",
+    "train_data": "train_data.json",
+    "valid_data": "valid_data.json",
     "rel2id": "rel2id.json",
     #"logger": "wandb", # if wandb, comment the following four lines
     
@@ -40,7 +40,7 @@ train_config = {
     # if not fr scratch, set a model_state_dict
     "model_state_dict_path": "",
     "hyper_parameters": {
-        "batch_size": 24,
+        "batch_size": 16,
         "epochs": 100,
         "seed": 2333,
         "log_interval": 10,
@@ -65,7 +65,7 @@ eval_config = {
     "score": True,
     
     "hyper_parameters": {
-        "batch_size": 32,
+        "batch_size": 16,
         "force_split": False,
         "max_test_seq_len": 512,
         "sliding_len": 50,
@@ -76,7 +76,7 @@ bert_config = {
     "data_home": "../data4tplinker/data4bert",
     "bert_path": "/home/hcw/bert-base-cased",
     "hyper_parameters": {
-        "lr": 5e-5,
+        "lr": 4e-5,
     },
 }
 bilstm_config = {

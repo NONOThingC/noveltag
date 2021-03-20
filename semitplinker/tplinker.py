@@ -8,6 +8,7 @@ from torch.nn.parameter import Parameter
 from common.components import HandshakingKernel
 import math
 import numpy as np
+import functools
 
 class HandshakingTaggingScheme(object):
     """docstring for HandshakingTaggingScheme"""
@@ -166,6 +167,77 @@ class HandshakingTaggingScheme(object):
             spots.append(spot)
         return spots
 
+    def decode_rel_fr_sharing_spots(self,
+                                    text,matrix_spots,tok2char_span,
+                                    tok_offset = 0, char_offset = 0):
+        ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots=matrix_spots
+        rel_list = []
+        # entity
+        head_ind2entities = {}
+        for sp in ent_matrix_spots:
+            tag_id = sp[2]
+            if tag_id != self.tag2id_ent["ENT-H2T"]:
+                continue
+
+            char_span_list = tok2char_span[sp[0]:sp[1] + 1]
+            char_sp = [char_span_list[0][0], char_span_list[-1][1]]
+            ent_text = text[char_sp[0]:char_sp[1]]
+
+            head_key = sp[0]  # take head as the key to entity list start with the head token
+            if head_key not in head_ind2entities:
+                head_ind2entities[head_key] = []
+            head_ind2entities[head_key].append({
+                "text": ent_text,
+                "tok_span": [sp[0], sp[1] + 1],
+                "char_span": char_sp,
+            })
+
+        # tail relation
+        tail_rel_memory_set = set()
+        for sp in tail_rel_matrix_spots:
+            rel_id = sp[0]
+            tag_id = sp[3]
+            if tag_id == self.tag2id_tail_rel["REL-ST2OT"]:
+                tail_rel_memory = "{}-{}-{}".format(rel_id, sp[1], sp[2])
+                tail_rel_memory_set.add(tail_rel_memory)
+            elif tag_id == self.tag2id_tail_rel["REL-OT2ST"]:
+                tail_rel_memory = "{}-{}-{}".format(rel_id, sp[2], sp[1])
+                tail_rel_memory_set.add(tail_rel_memory)
+
+        # head relation
+        for sp in head_rel_matrix_spots:
+            rel_id = sp[0]
+            tag_id = sp[3]
+
+            if tag_id == self.tag2id_head_rel["REL-SH2OH"]:
+                subj_head_key, obj_head_key = sp[1], sp[2]
+            elif tag_id == self.tag2id_head_rel["REL-OH2SH"]:
+                subj_head_key, obj_head_key = sp[2], sp[1]
+
+            if subj_head_key not in head_ind2entities or obj_head_key not in head_ind2entities:
+                # no entity start with subj_head_key and obj_head_key
+                continue
+            subj_list = head_ind2entities[subj_head_key]  # all entities start with this subject head
+            obj_list = head_ind2entities[obj_head_key]  # all entities start with this object head
+
+            # go over all subj-obj pair to check whether the relation exists
+            for subj in subj_list:
+                for obj in obj_list:
+                    tail_rel_memory = "{}-{}-{}".format(rel_id, subj["tok_span"][1] - 1, obj["tok_span"][1] - 1)
+                    if tail_rel_memory not in tail_rel_memory_set:
+                        # no such relation
+                        continue
+
+                    rel_list.append({
+                        "subject": subj["text"],
+                        "object": obj["text"],
+                        "subj_tok_span": [subj["tok_span"][0] + tok_offset, subj["tok_span"][1] + tok_offset],
+                        "obj_tok_span": [obj["tok_span"][0] + tok_offset, obj["tok_span"][1] + tok_offset],
+                        "subj_char_span": [subj["char_span"][0] + char_offset, subj["char_span"][1] + char_offset],
+                        "obj_char_span": [obj["char_span"][0] + char_offset, obj["char_span"][1] + char_offset],
+                        "predicate": self.id2rel[rel_id],
+                    })
+        return rel_list
 
     def decode_rel_fr_shaking_tag(self,
                       text, 
@@ -295,7 +367,23 @@ class DataMaker4Bert():
  
     def generate_batch(self, batch_data, data_type = "train"):
         """
-        将batch数据解析成需要的格式
+        那么现在对于进来的数据来说，
+        伪标签batch_data比之前多一个matrix_spots,也就是多一个维度。
+        多的那个维度tp[6]是伪标签生成的。
+        正常数据是一样的。
+
+        伪标签：多一个spots matrix
+        真数据：一样的matrix
+
+        当数据是训练集：
+        1.伪数据用spots matrix来生成.
+        2.真数据用正常spots matrix.
+        当数据是伪训练：
+        1.生成时候用正常spots matrix生成。
+        2.只有在伪训练才多返回一个spots matrix,这个是真实数据矩阵
+        when data_type is pseudo:
+            1. return spots matrix
+            2. 加载使用伪标签专属通道
         """
         sample_list = []
         input_ids_list = []
@@ -305,61 +393,45 @@ class DataMaker4Bert():
         ent_spots_list = []
         head_rel_spots_list = []
         tail_rel_spots_list = []
-        count_old_list=[]
-        count_new_list = []
-        ent_new_handshaking=[]
-        head_new_handshaking = []
-        tail_new_handshaking = []
+        matrix_spots_list=[]
         for i,tp in enumerate(batch_data):
             sample_list.append(tp[0])
             input_ids_list.append(tp[1])
-            attention_mask_list.append(tp[2])   
+            attention_mask_list.append(tp[2])
             token_type_ids_list.append(tp[3])        
             tok2char_span_list.append(tp[4])
+            matrix_spots_list.append(tp[5])
             try:
-                ent_new_handshaking.append(tp[6])   # bert这个数字为6,7,8;lstm为4，5，6
-                head_new_handshaking.append(tp[7])
-                tail_new_handshaking.append(tp[8])
+                tp[6]   # bert这个数字为6,7,8;lstm为4，5，6
             except:
                 sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
             else:
-                count_new_list.append(i)
-                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
-            if sign_for_not_pesudo and data_type != "test":
-                ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[5]
-                count_old_list.append(i)
+                 sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
+            if data_type != "test":
+                if sign_for_not_pesudo:# not use pesudo
+                    ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[5]
+                elif not sign_for_not_pesudo:# use pesudo
+                    ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[6]# use pseudo data
                 ent_spots_list.append(ent_matrix_spots)
                 head_rel_spots_list.append(head_rel_matrix_spots)
                 tail_rel_spots_list.append(tail_rel_matrix_spots)
-
-
-
         # @specific: indexed by bert tokenizer
         batch_input_ids = torch.stack(input_ids_list, dim = 0)
         batch_attention_mask = torch.stack(attention_mask_list, dim = 0)
         batch_token_type_ids = torch.stack(token_type_ids_list, dim = 0)
 
-
-        old_ent_shaking_tag, old_head_rel_shaking_tag, old_tail_rel_shaking_tag = None, None, None
-        if len(count_old_list)>0 and data_type != "test":
-            old_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
-            old_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
-            old_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
-        if len(count_new_list)>0:
-            sort_index=np.argsort(count_old_list+count_new_list)
-            if len(count_old_list)>0:
-                batch_ent_shaking_tag=torch.cat([old_ent_shaking_tag,torch.stack(ent_new_handshaking,dim=0)],dim=0)[sort_index]
-                batch_head_rel_shaking_tag=torch.cat([old_head_rel_shaking_tag,torch.stack(head_new_handshaking,dim=0)],dim=0)[sort_index]
-                batch_tail_rel_shaking_tag=torch.cat([old_tail_rel_shaking_tag,torch.stack(tail_new_handshaking,dim=0)],dim=0)[sort_index]
-            else:
-                batch_ent_shaking_tag = torch.stack(ent_new_handshaking, dim=0)[sort_index]
-                batch_head_rel_shaking_tag = torch.stack(head_new_handshaking, dim=0)[sort_index]
-                batch_tail_rel_shaking_tag = torch.stack(tail_new_handshaking, dim=0)[sort_index]
-
+        batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = None, None, None
+        if  data_type != "test":
+            batch_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
+            batch_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
+            batch_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
+        if data_type =="pseudo_training":
+            return sample_list, \
+                   batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, matrix_spots_list, \
+                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
         else:
-            batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag=old_ent_shaking_tag,old_head_rel_shaking_tag,old_tail_rel_shaking_tag
-        return sample_list, \
-              batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, \
+            return sample_list, \
+              batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,\
                 batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
 
 
@@ -646,7 +718,67 @@ class MetricsCalculator():
         sample_acc_ = torch.eq(correct_tag_num, torch.ones_like(correct_tag_num) * truth.size()[-1]).float()
         sample_acc = torch.mean(sample_acc_)
         return sample_acc
-    
+
+    def get_pseudo_rel_cpg(self, sample, tok2char_span,first_spots,second_spots,
+                    pattern="whole_text"):
+
+        correct_num, pred_num, gold_num = 0, 0, 0
+        text = sample["text"]
+
+        ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots=first_spots
+        pred_rel_list = self.handshaking_tagger.decode_rel_fr_sharing_spots(text, first_spots,tok2char_span)
+
+        gold_rel_list = self.handshaking_tagger.decode_rel_fr_sharing_spots(text, second_spots,tok2char_span)
+
+        if pattern == "only_head_index":
+            gold_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0], rel["predicate"], rel["obj_tok_span"][0]) for
+                 rel in gold_rel_list])
+            pred_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0], rel["predicate"], rel["obj_tok_span"][0]) for
+                 rel in pred_rel_list])
+        elif pattern == "whole_span":
+            gold_rel_set = set(["{}\u2E80{}\u2E80{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0],
+                                                                            rel["subj_tok_span"][1],
+                                                                            rel["predicate"],
+                                                                            rel["obj_tok_span"][0],
+                                                                            rel["obj_tok_span"][1]) for rel in
+                                gold_rel_list])
+            pred_rel_set = set(["{}\u2E80{}\u2E80{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0],
+                                                                            rel["subj_tok_span"][1],
+                                                                            rel["predicate"],
+                                                                            rel["obj_tok_span"][0],
+                                                                            rel["obj_tok_span"][1]) for rel in
+                                pred_rel_list])
+        elif pattern == "whole_text":
+            gold_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subject"], rel["predicate"], rel["object"]) for rel in
+                 gold_rel_list])
+            pred_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subject"], rel["predicate"], rel["object"]) for rel in
+                 pred_rel_list])
+        elif pattern == "only_head_text":
+            gold_rel_set = set(["{}\u2E80{}\u2E80{}".format(rel["subject"].split(" ")[0], rel["predicate"],
+                                                            rel["object"].split(" ")[0]) for rel in gold_rel_list])
+            pred_rel_set = set(["{}\u2E80{}\u2E80{}".format(rel["subject"].split(" ")[0], rel["predicate"],
+                                                            rel["object"].split(" ")[0]) for rel in pred_rel_list])
+
+        for rel_str in pred_rel_set:
+            if rel_str in gold_rel_set:
+                correct_num += 1
+
+        pred_num += len(pred_rel_set)
+        gold_num += len(gold_rel_set)
+        if pred_num==0 or gold_num==0:
+            return 0
+        elif correct_num/max(pred_num,gold_num) < 0.5:
+            return 0
+        elif pred_num!=gold_num:
+            return 0
+        else:
+            return correct_num/pred_num
+
+
     def get_rel_cpg(self, sample_list, tok2char_span_list, 
                  batch_pred_ent_shaking_outputs,
                  batch_pred_head_rel_shaking_outputs,

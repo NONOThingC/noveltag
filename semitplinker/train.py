@@ -7,6 +7,7 @@ import json
 import os
 import warnings
 
+import functools
 import objgraph
 from tqdm import tqdm
 import re
@@ -530,54 +531,7 @@ if not config["fr_scratch"]:
     print("------------model state {} loaded ----------------".format(
         model_state_path.split("/")[-1]))
 
-def valid_step(model,batch_valid_data):
-    if config["encoder"] == "BERT":
-        sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
 
-        batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-            batch_input_ids.to(device), batch_attention_mask.to(device),
-            batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
-            batch_head_rel_shaking_tag.to(device),
-            batch_tail_rel_shaking_tag.to(device))
-
-    elif config["encoder"] in {
-            "BiLSTM",
-    }:
-        sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
-
-        batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-            batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
-            batch_head_rel_shaking_tag.to(device),
-            batch_tail_rel_shaking_tag.to(device))
-
-    with torch.no_grad():
-        if config["encoder"] == "BERT":
-            ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
-                batch_input_ids,
-                batch_attention_mask,
-                batch_token_type_ids,
-            )
-        elif config["encoder"] in {
-                "BiLSTM",
-        }:
-            ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
-                batch_input_ids)
-
-    ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                 batch_ent_shaking_tag)
-    head_rel_sample_acc = metrics.get_sample_accuracy(
-        head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-    tail_rel_sample_acc = metrics.get_sample_accuracy(
-        tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-
-    rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
-                                  ent_shaking_outputs,
-                                  head_rel_shaking_outputs,
-                                  tail_rel_shaking_outputs,
-                                  hyper_parameters["match_pattern"])
-
-    return ent_sample_acc.item(), head_rel_sample_acc.item(
-    ), tail_rel_sample_acc.item(), rel_cpg
 
 ## iterative update
 def split_sample(dataset,n_part):
@@ -627,14 +581,12 @@ def stratified_sample(dataset, ratio):
 # seed_val = 19
 # LAMBD = 0.2
 # 正常参数
-BATCH_SIZE=24
+BATCH_SIZE=16
 LABEL_OF_TRAIN = 0.1  # Label ratio
-FIRST_EPOCHS= 1
-TOTAL_EPOCHS = 6
-MATE_EPOCHS = 4
+FIRST_EPOCHS= 5
+TOTAL_EPOCHS = 10
 seed_val = 19
 LAMBD = 0.2
-trunk_size=1000
 # stratified data
 labeled_dataset, unlabeled_dataset_total = stratified_sample(MyDataset(indexed_train_data),LABEL_OF_TRAIN)
 
@@ -660,7 +612,7 @@ unlabeled_dataloader_all = DataLoader(
     shuffle=False,
     num_workers=0,
     drop_last=False,
-    collate_fn=data_maker.generate_batch,
+    collate_fn=functools.partial(data_maker.generate_batch,data_type="pseudo_training"),
 )
 
 indexed_valid_data = data_maker.get_indexed_data(valid_data, max_seq_len)
@@ -686,37 +638,64 @@ def batch2dataset(*args):
         a.append(i)
     return a
 
-def excellent_calulate(fine_map, id, data):
+def excellent_calulate(metrics,fine_map,data):
     # 算法要求连续产生一样的结果才行
-    flag=False
-    value=data[-2:]
-    if id in fine_map:
-        count_n, last_data = fine_map[id]
-        last_value=last_data[-2:]
-        for i in range(2):
-            if int(torch.sum(value[0]))!=0 and value[i].shape[0]*value[i].shape[1]==int(torch.sum(torch.eq(last_value[i], value[i]))):
-                flag=True
-        if flag:# if eq
-            count_n+=1
+    """
+    Use data to calculate, then store data.
+    """
+    for one_data in data:
+        idx = one_data[0]['id'].split("_")[1]
+        if idx in fine_map:
+            last_score,last_data = fine_map[idx]
+            score = metrics.get_pseudo_rel_cpg(one_data[0], one_data[4],
+                                               last_data[6],one_data[6],
+                                               pattern="whole_text")
+            if score>=0.9:
+                if score>last_score:
+                    fine_map[idx] = (score, one_data)
         else:
-            count_n-=1#这里保证了连续性
-            if count_n<1:
-                count_n=1
-        fine_map[id]=(count_n,data)
-
-    else:
-        fine_map[id] = [1, data]
+            fine_map[idx] = (0,one_data)
 
 def exct_extract(fine_map):
-    sorted(fine_map.items(), key=lambda k_v: k_v[0][0], reverse=True)
+    fine_map=dict(sorted(fine_map.items(), key=lambda k_v: k_v[1][0], reverse=True))
     exct_list=[]
-    for key,values in fine_map.items():
-        if values[0]>3:
+    for values in fine_map.values():
+        if values[0]>0.95:
             exct_list.append(values[1])#只将data添加进去
         else:
             break
     return exct_list
 
+def w_rel_seq_score(pre_seq,seq_val_acc):
+    """
+    first entity to a baseline,
+    then focus on relations.
+
+    """
+    enh_rate =2#系数提升几倍
+    ent_rate=6*(1-seq_val_acc[0])
+    rel_rate=6*seq_val_acc[0]
+    if seq_val_acc[0]<0.6:
+        for shaking_outputs in model_output:
+            pred_weight, label = torch.max(shaking_outputs, dim=-1)
+            pred_weight=pred_weight+torch.mul(enh_rate*label,pred_weight)
+            pred_weights.append(pred_weight)
+            sequence_weight = torch.mean(pred_weight, dim=-1)
+            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+                sequence_weight = torch.mean(sequence_weight, dim=-1)
+            sequence_weights.append(sequence_weight)
+    else:
+        for shaking_outputs in model_output:
+            pred_weight, label = torch.max(shaking_outputs, dim=-1)
+            if len(pred_weight.shape) == 3:
+                pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
+            else:
+                pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
+            pred_weights.append(pred_weight)
+            sequence_weight = torch.mean(pred_weight, dim=-1)
+            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+                sequence_weight = torch.mean(sequence_weight, dim=-1)
+            sequence_weights.append(sequence_weight)
 
 
 
@@ -734,7 +713,6 @@ two aspect:
 train_dataloader = labeled_dataloader
 fine_map = collections.defaultdict(tuple)  # key:train id ; value:correct number
 for total_epoch in range(TOTAL_EPOCHS):
-    pseudo_data_list = []
     # Add an inner loop to judge the entire unlabeled data set finished
 
     print(f"Total epoch{total_epoch}:\n")
@@ -841,16 +819,16 @@ for total_epoch in range(TOTAL_EPOCHS):
             ),
                 end="")
 
-            if config["logger"] == "wandb" and batch_ind % hyper_parameters[
-                "log_interval"] == 0:
-                logger.log({
-                    "train_loss": avg_loss,
-                    "train_ent_seq_acc": avg_ent_sample_acc,
-                    "train_head_rel_acc": avg_head_rel_sample_acc,
-                    "train_tail_rel_acc": avg_tail_rel_sample_acc,
-                    "learning_rate": optimizer1.param_groups[0]['lr'],
-                    "time": time.time() - t_ep,
-                })
+        if config["logger"] == "wandb" and batch_ind % hyper_parameters[
+            "log_interval"] == 0:
+            logger.log({
+                "train_loss": avg_loss,
+                "train_ent_seq_acc": avg_ent_sample_acc,
+                "train_head_rel_acc": avg_head_rel_sample_acc,
+                "train_tail_rel_acc": avg_tail_rel_sample_acc,
+                "learning_rate": optimizer1.param_groups[0]['lr'],
+                "time": time.time() - t_ep,
+            })
 
         if config[
             "logger"] != "wandb":  # only log once for training if logger is not wandb
@@ -945,6 +923,7 @@ for total_epoch in range(TOTAL_EPOCHS):
         logger.log(log_dict)
         pprint(log_dict)
 
+    seq_val_acc=(avg_ent_sample_acc,avg_head_rel_sample_acc,avg_tail_rel_sample_acc)
         # valid_f1 = rel_prf[2]
 
         ## save when better
@@ -975,7 +954,7 @@ for total_epoch in range(TOTAL_EPOCHS):
     #
     print("generate pseudo label\n")
     Z = 12  # Incremental Epoch Number
-    Z_RATIO = Z / BATCH_SIZE
+    Z_RATIO = (1-(sum(seq_val_acc)//3)-0.1)*BATCH_SIZE
     ## valid
     modelf1.eval()
     t_ep = time.time()
@@ -988,11 +967,11 @@ for total_epoch in range(TOTAL_EPOCHS):
     train_dataloader = labeled_dataloader
     trunk_count=0
     size_count=[]
-
+    results = []
     for batch_ind, batch_valid_data in enumerate(tqdm(unlabeled_dataloader_all, desc="Validating")):
-        results = []
+
         if config["encoder"] == "BERT":
-            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,matrix_spots_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
             batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
                 batch_input_ids.to(device), batch_attention_mask.to(device),
                 batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
@@ -1001,7 +980,7 @@ for total_epoch in range(TOTAL_EPOCHS):
         elif config["encoder"] in {
             "BiLSTM",
         }:
-            sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+            sample_list, batch_input_ids, tok2char_span_list,matrix_spots_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
             batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
                 batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
                 batch_head_rel_shaking_tag.to(device),
@@ -1020,92 +999,105 @@ for total_epoch in range(TOTAL_EPOCHS):
                 ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
                     batch_input_ids)
 
-        batch_pred_ent_shaking_tag = torch.argmax(ent_shaking_outputs, dim=-1)
-        batch_pred_head_rel_shaking_tag = torch.argmax(head_rel_shaking_outputs, dim=-1)
-        batch_pred_tail_rel_shaking_tag = torch.argmax(tail_rel_shaking_outputs, dim=-1)
+            batch_pred_ent_shaking_tag = torch.argmax(ent_shaking_outputs, dim=-1)
+            batch_pred_head_rel_shaking_tag = torch.argmax(head_rel_shaking_outputs, dim=-1)
+            batch_pred_tail_rel_shaking_tag = torch.argmax(tail_rel_shaking_outputs, dim=-1)
 
-        # 得到hand shaking结果
-        ## 反思，为啥不用循环呢？
-        # 三个都选按出来以后label的交集呢？ 因为要考虑到这种时候可能会存在着交集为空集以及变长的每次选择序列数目
-        pred_weights = []
-        labels = []
-        sequence_weights = []
-        sort_indexs = []
-        # fine_indexs= []
-        model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
-        for shaking_outputs in model_output:
-            pred_weight, label = torch.max(shaking_outputs, dim=-1)
-            pred_weights.append(pred_weight)
-            labels.append(label.to("cpu"))
-            sequence_weight = torch.mean(pred_weight, dim=-1)
-            if len(sequence_weight.shape)==2:
-                sequence_weight=torch.mean(sequence_weight, dim=-1)
-            sequence_weights.append(sequence_weight)
-            sort_index = torch.argsort(sequence_weight, descending=True)
-            sort_index = sort_index[0:int(len(sort_index) * Z_RATIO)]
-            # fine_index = sort_index[0:int(len(sort_index) * Z_RATIO)//2]
-            sort_indexs.append(set(sort_index.tolist()))
-            # fine_indexs.append(set(fine_index.tolist()))
-        inter_index = set()
+            # 得到hand shaking结果
+            ## 反思，为啥不用循环呢？
+            # 三个都选按出来以后label的交集呢？ 因为要考虑到这种时候可能会存在着交集为空集以及变长的每次选择序列数目
+            pred_weights = []
+            labels = []
+            sequence_weights = []
+            sort_indexs = []
+            # fine_indexs= []
+            model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
+            enh_rate = 2  # 系数提升几倍
+            ent_rate = 10 * (1 - seq_val_acc[0])
+            rel_rate = 10 * seq_val_acc[0] # From valid step
+            if seq_val_acc[0] < 0.6:
+                for shaking_outputs in model_output:
+                    pred_weight, label = torch.max(shaking_outputs, dim=-1)
+                    pred_weight = pred_weight + torch.mul(enh_rate * label, pred_weight)
+                    pred_weights.append(pred_weight)
+                    sequence_weight = torch.mean(pred_weight, dim=-1)
+                    if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+                        sequence_weight = torch.mean(sequence_weight, dim=-1)
+                    sequence_weights.append(sequence_weight)
+            else:
+                for shaking_outputs in model_output:
+                    pred_weight, label = torch.max(shaking_outputs, dim=-1)
+                    if len(pred_weight.shape) == 3:
+                        pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
+                    else:
+                        pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
+                    pred_weights.append(pred_weight)
+                    sequence_weight = torch.mean(pred_weight, dim=-1)
+                    if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+                        sequence_weight = torch.mean(sequence_weight, dim=-1)
+                    sequence_weights.append(sequence_weight)
 
-        for i in sort_indexs[1:2]:#注意这里分数暂时只考虑了三元组的 #这里意思是头尾实体都找了相同index
-            inter_index = inter_index & i
-        if len(inter_index) <= (sequence_weight.shape[0] * Z_RATIO) // 3:
-            # entity\head\rel的分数综合考虑
+                # fine_indexs.append(set(fine_index.tolist()))
+
             # # Pseudo Label Selection, top Z%
+
             final_sequence_weight = sum(sequence_weights)
             final_sort = torch.argsort(final_sequence_weight, descending=True)
             final_sort = final_sort[0:int(len(final_sort) * Z_RATIO) if int(len(final_sort) * Z_RATIO)>0 else 1]
             inter_index = final_sort
-        sort_input=[]
-        for var in batch_valid_data:
-            if isinstance(var, torch.Tensor):
-                sort_input.append(var[inter_index])
-            elif isinstance(var, list):
-                sort_input.append([var[i] for i in inter_index])
-            else:
-                raise Exception
-        model_output=[var[inter_index].to("cpu") for var in model_output]
-        gold_labels = sort_input[-3:]
-        pseudo_labels = [label[inter_index] for label in labels]
-        pseudo_count += len(inter_index)
-        for i in range(3):
-            results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]))
-        print("Pseudo label acc is:{}".format(np.mean(results)))
-        # pred_id = torch.argmax(pred, dim=-1)
-        # # (batch_size, ..., seq_len) -> (batch_size, )，把每个sample压成一条seq
-        # pred_id = pred_id.view(pred_id.size()[0], -1)
-        # record id and corresponding label
-        # update training data
-        if total_epoch != TOTAL_EPOCHS-1:
-            batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
+            sort_input=[]
+            for var in batch_valid_data:
+                if isinstance(var, torch.Tensor):
+                    sort_input.append(var[inter_index].to("cpu"))
+                elif isinstance(var, list):
+                    sort_input.append([var[i] for i in inter_index])
+                else:
+                    raise Exception
+            model_output=[var[inter_index].to("cpu") for var in model_output]
+            gold_labels = sort_input[-3:]
+            pseudo_labels = [label[inter_index] for label in labels]
+            pseudo_count += len(inter_index)
+            #此操作耗时，得到序号inter_index再解析
+            sorted_spots_list = []
+
+            for i in inter_index:
+                sorted_spots_list.append((handshaking_tagger.get_sharing_spots_fr_shaking_tag(batch_pred_ent_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_head_rel_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_tail_rel_shaking_tag[i])))
+                # sorted_spots_list.append(matrix_spots_list[i])
+            for i in range(3):
+                results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]).item())
+            print("Pseudo label acc is:{}".format(np.mean(results)))
+            # pred_id = torch.argmax(pred, dim=-1)
+            # # (batch_size, ..., seq_len) -> (batch_size, )，把每个sample压成一条seq
+            # pred_id = pred_id.view(pred_id.size()[0], -1)
+            # record id and corresponding label
+            # update training data
+
+
+            batch_new_data=batch2dataset(*(sort_input[:-3]+[sorted_spots_list]))#sorted_spots_list is pseudo label
             batch_new_data_list.extend(batch_new_data)
-        for i in range(batch_pred_ent_shaking_tag.shape[0]):
-            ent_matrix_spots = handshaking_tagger.get_sharing_spots_fr_shaking_tag(batch_pred_ent_shaking_tag[i])
-            head_rel_matrix_spots = handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_head_rel_shaking_tag[i])
-            tail_rel_matrix_spots = handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_tail_rel_shaking_tag[i])
-        for one_data in batch_new_data:
-            key=one_data[0]['id'].split("_")[1]
-            excellent_calulate(fine_map,key,one_data)
-        if total_epoch == TOTAL_EPOCHS - 1:
-            exct_indexs_list=exct_extract(fine_map)
-
-        if len(batch_new_data_list)>trunk_size:#1000大概20~30GB
-            # 文件流操作
-            print("Trunk {}".format(trunk_count))
-            with open("Trunk" + str(trunk_count) + ".pkl", "wb") as f:
-                pickle.dump(batch_new_data_list, f)
-            trunk_count+=1
-            size_count.append(len(batch_new_data_list))
-            batch_new_data=0
-            train_add_dataset=0
-            batch_new_data_list = []
-            print("Trunk end")
+            # excellent_calulate(metrics, fine_map, batch_new_data)
 
 
-        # 给标记成合适的数据格式
-        # 数据筛选(三个维度应采用一个指标筛选进来)
+            # if total_epoch != TOTAL_EPOCHS-1:
+            #     batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
+            #     batch_new_data_list.extend(batch_new_data)
 
+
+            # if len(batch_new_data_list)>trunk_size:#1000大概20~30GB
+            #     # 文件流操作
+            #     print("Trunk {}".format(trunk_count))
+            #     with open("Trunk" + str(trunk_count) + ".pkl", "wb") as f:
+            #         pickle.dump(batch_new_data_list, f)
+            #     trunk_count+=1
+            #     size_count.append(len(batch_new_data_list))
+            #     batch_new_data=0
+            #     train_add_dataset=0
+            #     batch_new_data_list = []
+            #     print("Trunk end")
+
+
+            # 给标记成合适的数据格式
+            # 数据筛选(三个维度应采用一个指标筛选进来)
 
     log_dict = {
                 "use pseudo number": pseudo_count,
@@ -1114,14 +1106,14 @@ for total_epoch in range(TOTAL_EPOCHS):
     }
     logger.log(log_dict)
     pprint(log_dict)
-    # 清理尾部数据
-    if len(batch_new_data_list) > 0:  # 1000大概2~3GB
-        # 文件流操作
-        with open("Trunk" + str(trunk_count) + ".pkl", "wb") as f:
-            pickle.dump(batch_new_data_list, f)
-        trunk_count += 1
-        size_count.append(len(batch_new_data_list))
-        batch_new_data_list = []
+    # # 清理尾部数据
+    # if len(batch_new_data_list) > 0:  # 1000大概2~3GB
+    #     # 文件流操作
+    #     with open("Trunk" + str(trunk_count) + ".pkl", "wb") as f:
+    #         pickle.dump(batch_new_data_list, f)
+    #     trunk_count += 1
+    #     size_count.append(len(batch_new_data_list))
+    #     batch_new_data_list = []
     # excellent set record and update
     # if len(exct_indexs_list)>0:#如果集合有值，应该被每次都加到train_dataloader中
     #     # 可靠集合
@@ -1136,7 +1128,7 @@ for total_epoch in range(TOTAL_EPOCHS):
     #         drop_last=False,
     #         collate_fn=data_maker.generate_batch,
     #     )
-    train_add_dataset = train_dataloader.dataset + MultiFileDataset(size_count)
+    train_add_dataset = train_dataloader.dataset + MyDataset(batch_new_data_list)
     train_dataloader = DataLoader(
         train_add_dataset,  # The training samples.
         batch_size=hyper_parameters["batch_size"],
@@ -1145,90 +1137,106 @@ for total_epoch in range(TOTAL_EPOCHS):
         drop_last=False,
         collate_fn=data_maker.generate_batch,
     )
+    # exct_indexs_list = exct_extract(fine_map)
+    # if len(exct_indexs_list)!=0:
+    #     pprint({"excellent set: {}".format(len(exct_indexs_list))})
+    #     train_add_dataset = train_dataloader.dataset + MyDataset(exct_indexs_list)
+    #     train_dataloader = DataLoader(
+    #         train_add_dataset,  # The training samples.
+    #         batch_size=hyper_parameters["batch_size"],
+    #         shuffle=True,
+    #         num_workers=0,
+    #         drop_last=False,
+    #         collate_fn=data_maker.generate_batch,
+    #     )
+    # exct_indexs_list=[]
+    batch_new_data_list=[]
+    torch.cuda.empty_cache()
     ## valid
-    modelf1.eval()
-    t_ep = time.time()
-    total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
-    total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
-    for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
-        if config["encoder"] == "BERT":
-            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
-
-            batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                batch_input_ids.to(device), batch_attention_mask.to(device),
-                batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
-                batch_head_rel_shaking_tag.to(device),
-                batch_tail_rel_shaking_tag.to(device))
-
-        elif config["encoder"] in {
-            "BiLSTM",
-        }:
-            sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
-
-            batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
-                batch_head_rel_shaking_tag.to(device),
-                batch_tail_rel_shaking_tag.to(device))
-
-        with torch.no_grad():
+    if total_epoch==TOTAL_EPOCHS-1:
+        modelf1.eval()
+        t_ep = time.time()
+        total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+        total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+        for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
             if config["encoder"] == "BERT":
-                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                    batch_input_ids,
-                    batch_attention_mask,
-                    batch_token_type_ids,
-                )
+                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+                batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_attention_mask.to(device),
+                    batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
+
             elif config["encoder"] in {
                 "BiLSTM",
             }:
-                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                    batch_input_ids)
+                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
 
-        ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                     batch_ent_shaking_tag)
-        head_rel_sample_acc = metrics.get_sample_accuracy(
-            head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-        tail_rel_sample_acc = metrics.get_sample_accuracy(
-            tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+                batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
 
-        rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
-                                      ent_shaking_outputs,
-                                      head_rel_shaking_outputs,
-                                      tail_rel_shaking_outputs,
-                                      hyper_parameters["match_pattern"])
+            with torch.no_grad():
+                if config["encoder"] == "BERT":
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids,
+                        batch_attention_mask,
+                        batch_token_type_ids,
+                    )
+                elif config["encoder"] in {
+                    "BiLSTM",
+                }:
+                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                        batch_input_ids)
 
-        ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg =  ent_sample_acc.item(), head_rel_sample_acc.item(
-        ), tail_rel_sample_acc.item(), rel_cpg
+            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                         batch_ent_shaking_tag)
+            head_rel_sample_acc = metrics.get_sample_accuracy(
+                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+            tail_rel_sample_acc = metrics.get_sample_accuracy(
+                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+            rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
+                                          ent_shaking_outputs,
+                                          head_rel_shaking_outputs,
+                                          tail_rel_shaking_outputs,
+                                          hyper_parameters["match_pattern"])
+
+            ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg =  ent_sample_acc.item(), head_rel_sample_acc.item(
+            ), tail_rel_sample_acc.item(), rel_cpg
 
 
-        total_ent_sample_acc += ent_sample_acc
-        total_head_rel_sample_acc += head_rel_sample_acc
-        total_tail_rel_sample_acc += tail_rel_sample_acc
+            total_ent_sample_acc += ent_sample_acc
+            total_head_rel_sample_acc += head_rel_sample_acc
+            total_tail_rel_sample_acc += tail_rel_sample_acc
 
-        total_rel_correct_num += rel_cpg[0]
-        total_rel_pred_num += rel_cpg[1]
-        total_rel_gold_num += rel_cpg[2]
+            total_rel_correct_num += rel_cpg[0]
+            total_rel_pred_num += rel_cpg[1]
+            total_rel_gold_num += rel_cpg[2]
 
-    avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
-    avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
-    avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+        avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+        avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+        avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
 
-    rel_prf = metrics.get_prf_scores(total_rel_correct_num,
-                                     total_rel_pred_num,
-                                     total_rel_gold_num)
+        rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+                                         total_rel_pred_num,
+                                         total_rel_gold_num)
 
-    log_dict = {
-        "val_ent_seq_acc": avg_ent_sample_acc,
-        "val_head_rel_acc": avg_head_rel_sample_acc,
-        "val_tail_rel_acc": avg_tail_rel_sample_acc,
-        "val_prec": rel_prf[0],
-        "val_recall": rel_prf[1],
-        "val_f1": rel_prf[2],
-        "time": time.time() - t_ep,
-    }
-    logger.log(log_dict)
-    pprint(log_dict)
+        log_dict = {
+            "val_ent_seq_acc": avg_ent_sample_acc,
+            "val_head_rel_acc": avg_head_rel_sample_acc,
+            "val_tail_rel_acc": avg_tail_rel_sample_acc,
+            "val_prec": rel_prf[0],
+            "val_recall": rel_prf[1],
+            "val_f1": rel_prf[2],
+            "time": time.time() - t_ep,
+        }
+        logger.log(log_dict)
+        pprint(log_dict)
 
-    valid_f1 = rel_prf[2]
+        valid_f1 = rel_prf[2]
 
 # ----------------------training complete-----------------------
 
