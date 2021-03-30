@@ -582,9 +582,9 @@ def stratified_sample(dataset, ratio):
 # LAMBD = 0.2
 # 正常参数
 BATCH_SIZE=16
-LABEL_OF_TRAIN = 0.08  # Label ratio
+LABEL_OF_TRAIN = 0.05  # Label ratio
 FIRST_EPOCHS= 5
-TOTAL_EPOCHS = 20
+TOTAL_EPOCHS = 10
 seed_val = 19
 LAMBD = 0.2
 # stratified data
@@ -1013,8 +1013,8 @@ for total_epoch in range(TOTAL_EPOCHS):
             # fine_indexs= []
             model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
             enh_rate = 2  # 系数提升几倍
-            ent_rate = 5 *  seq_val_acc[0]
-            rel_rate = 5 * (seq_val_acc[1]+seq_val_acc[2]) # From valid step
+            ent_rate = 10 * (1 - seq_val_acc[0])
+            rel_rate = 10 * seq_val_acc[0] # From valid step
             if seq_val_acc[0] < 0.6:
                 for shaking_outputs in model_output:
                     pred_weight, label = torch.max(shaking_outputs, dim=-1)

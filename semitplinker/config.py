@@ -76,7 +76,7 @@ bert_config = {
     "data_home": "../data4tplinker/data4bert",
     "bert_path": "/home/hcw/bert-base-cased",
     "hyper_parameters": {
-        "lr": 4e-5,
+        "lr": 6e-5,
     },
 }
 bilstm_config = {
