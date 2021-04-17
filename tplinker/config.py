@@ -23,13 +23,13 @@ train_config = {
     "train_data": "train_data.json",
     "valid_data": "valid_data.json",
     "rel2id": "rel2id.json",
-    "logger": "wandb", # if wandb, comment the following four lines
+    # "logger": "wandb", # if wandb, comment the following four lines
     
-#     # if logger is set as default, uncomment the following four lines
-#     "logger": "default", 
-#     "run_id": run_id,
-#     "log_path": "./default_log_dir/default.log",
-#     "path_to_save_model": "./default_log_dir/{}".format(run_id),
+    # if logger is set as default, uncomment the following four lines
+    "logger": "default",
+    "run_id": run_id,
+    "log_path": "./default_log_dir/default.log",
+    "path_to_save_model": "./default_log_dir/{}".format(run_id),
 
     # only save the model state dict if F1 score surpasses <f1_2_save>
     "f1_2_save": 0, 
@@ -55,11 +55,11 @@ eval_config = {
     "model_state_dict_dir": "./default_log_dir", # if use wandb, set "./wandb", or set "./default_log_dir" if you use default logger
     "run_ids": ["DGKhEFlH", ],
     "last_k_model": 1,
-    "test_data": "*test*.json", # "*test*.json"
+    "test_data": "test_data.json", # "*test*.json"
     
     # where to save results
-    "save_res": False,
-    "save_res_dir": "../results",
+    "save_res": True,
+    "save_res_dir": "../test_results",
     
     # score: set true only if test set is annotated with ground truth
     "score": True,

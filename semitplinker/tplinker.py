@@ -394,6 +394,7 @@ class DataMaker4Bert():
         head_rel_spots_list = []
         tail_rel_spots_list = []
         matrix_spots_list=[]
+        pseudo_flag=[]
         for i,tp in enumerate(batch_data):
             sample_list.append(tp[0])
             input_ids_list.append(tp[1])
@@ -405,8 +406,10 @@ class DataMaker4Bert():
                 tp[6]   # bert这个数字为6,7,8;lstm为4，5，6
             except:
                 sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
+                pseudo_flag.append(0)
             else:
-                 sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
+                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
+                pseudo_flag.append(1)
             if data_type != "test":
                 if sign_for_not_pesudo:# not use pesudo
                     ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[5]
@@ -428,6 +431,10 @@ class DataMaker4Bert():
         if data_type =="pseudo_training":
             return sample_list, \
                    batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, matrix_spots_list, \
+                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+        elif data_type =="student":
+            return sample_list, \
+                   batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,pseudo_flag, \
                    batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
         else:
             return sample_list, \
@@ -505,16 +512,20 @@ class TPLinkerBert(nn.Module):
                  inner_enc_type,
                  dist_emb_size,
                  ent_add_dist,
-                 rel_add_dist
+                 rel_add_dist,
+                 dropout=0.1,
+                 is_dropout=False
                 ):
         super().__init__()
         self.encoder = encoder
         hidden_size = encoder.config.hidden_size
-        
+        self.dropout_ent=nn.Dropout(dropout)
+        self.dropout_head = nn.Dropout(dropout)
+        self.dropout_tail = nn.Dropout(dropout)
         self.ent_fc = nn.Linear(hidden_size, 2)
         self.head_rel_fc_list = [nn.Linear(hidden_size, 3) for _ in range(rel_size)]#这个地方挺有意思
         self.tail_rel_fc_list = [nn.Linear(hidden_size, 3) for _ in range(rel_size)]
-        
+        self.is_dropout=is_dropout
         for ind, fc in enumerate(self.head_rel_fc_list):
             self.register_parameter("weight_4_head_rel{}".format(ind), fc.weight)
             self.register_parameter("bias_4_head_rel{}".format(ind), fc.bias)
@@ -574,17 +585,27 @@ class TPLinkerBert(nn.Module):
 #             shaking_hiddens4rel = shaking_hiddens + self.dist_embbedings[None,:,:].repeat(shaking_hiddens.size()[0], 1, 1)
 #         else:
 #             shaking_hiddens4rel = shaking_hiddens
-            
-        ent_shaking_outputs = self.ent_fc(shaking_hiddens4ent)
-            
-        head_rel_shaking_outputs_list = []
-        for fc in self.head_rel_fc_list:
-            head_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
+        if self.is_dropout:
+            ent_shaking_outputs =self.dropout_ent( self.ent_fc(shaking_hiddens4ent))
 
-        tail_rel_shaking_outputs_list = []
-        for fc in self.tail_rel_fc_list:
-            tail_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
-        
+            head_rel_shaking_outputs_list = []
+            for fc in self.head_rel_fc_list:
+                head_rel_shaking_outputs_list.append(self.dropout_head(fc(shaking_hiddens4rel)))
+
+            tail_rel_shaking_outputs_list = []
+            for fc in self.tail_rel_fc_list:
+                tail_rel_shaking_outputs_list.append(self.dropout_tail(fc(shaking_hiddens4rel)))
+        else:
+            ent_shaking_outputs = self.ent_fc(shaking_hiddens4ent)
+
+            head_rel_shaking_outputs_list = []
+            for fc in self.head_rel_fc_list:
+                head_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
+
+            tail_rel_shaking_outputs_list = []
+            for fc in self.tail_rel_fc_list:
+                tail_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
+
         head_rel_shaking_outputs = torch.stack(head_rel_shaking_outputs_list, dim = 1)
         tail_rel_shaking_outputs = torch.stack(tail_rel_shaking_outputs_list, dim = 1)
         
