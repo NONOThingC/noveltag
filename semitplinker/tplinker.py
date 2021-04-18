@@ -401,9 +401,9 @@ class DataMaker4Bert():
             attention_mask_list.append(tp[2])
             token_type_ids_list.append(tp[3])        
             tok2char_span_list.append(tp[4])
-            matrix_spots_list.append(tp[5])
+            matrix_spots_list.append(tp[5])# This is true label
             try:
-                tp[6]   # bert这个数字为6,7,8;lstm为4，5，6
+                tp[6]   # bert这个数字为6,7,8;lstm为4，5，6 #This is pseudo label
             except:
                 sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
                 pseudo_flag.append(0)
@@ -418,6 +418,7 @@ class DataMaker4Bert():
                 ent_spots_list.append(ent_matrix_spots)
                 head_rel_spots_list.append(head_rel_matrix_spots)
                 tail_rel_spots_list.append(tail_rel_matrix_spots)
+
         # @specific: indexed by bert tokenizer
         batch_input_ids = torch.stack(input_ids_list, dim = 0)
         batch_attention_mask = torch.stack(attention_mask_list, dim = 0)
@@ -440,9 +441,6 @@ class DataMaker4Bert():
             return sample_list, \
               batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,\
                 batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
-
-
-
 
 
 
@@ -477,18 +475,29 @@ class DataMaker4BiLSTM():
         sample_list = []
         input_ids_list = []
         tok2char_span_list = []
-        
         ent_spots_list = []
         head_rel_spots_list = []
         tail_rel_spots_list = []
-
+        matrix_spots_list=[]
+        pseudo_flag=[]
         for tp in batch_data:
             sample_list.append(tp[0])
             input_ids_list.append(tp[1])    
             tok2char_span_list.append(tp[2])
-            
+            matrix_spots_list.append(tp[3])
+            try:
+                tp[4]   # bert这个数字为6,7,8;lstm为4，5，6
+            except:
+                sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
+                pseudo_flag.append(0)
+            else:
+                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
+                pseudo_flag.append(1)
             if data_type != "test":
-                ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[3]
+                if sign_for_not_pesudo:  # not use pesudo
+                    ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[3]
+                elif not sign_for_not_pesudo:  # use pesudo
+                    ent_matrix_spots, head_rel_matrix_spots, tail_rel_matrix_spots = tp[4]
                 ent_spots_list.append(ent_matrix_spots)
                 head_rel_spots_list.append(head_rel_matrix_spots)
                 tail_rel_spots_list.append(tail_rel_matrix_spots)
@@ -500,11 +509,19 @@ class DataMaker4BiLSTM():
             batch_ent_shaking_tag = self.handshaking_tagger.sharing_spots2shaking_tag4batch(ent_spots_list)
             batch_head_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(head_rel_spots_list)
             batch_tail_rel_shaking_tag = self.handshaking_tagger.spots2shaking_tag4batch(tail_rel_spots_list)
+        if data_type == "pseudo_training":
+            return sample_list, \
+                   batch_input_ids, tok2char_span_list,matrix_spots_list, \
+                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+        elif data_type == "student":
+            return sample_list, \
+                   batch_input_ids, tok2char_span_list,pseudo_flag, \
+                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+        else:
+            return sample_list, \
+                    batch_input_ids, tok2char_span_list, \
+                    batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
 
-        return sample_list, \
-                batch_input_ids, tok2char_span_list, \
-                batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
-    
 class TPLinkerBert(nn.Module):
     def __init__(self, encoder, 
                  rel_size, 
@@ -622,8 +639,12 @@ class TPLinkerBiLSTM(nn.Module):
                  inner_enc_type,
                  dist_emb_size, 
                  ent_add_dist, 
-                 rel_add_dist):
+                 rel_add_dist,
+                 fc_dropout=0.4,
+                 is_fc_dropout=False):
         super().__init__()
+        self.fc_dropout=nn.Dropout(fc_dropout)
+        self.is_fc_dropout=is_fc_dropout
         self.word_embeds = nn.Embedding.from_pretrained(init_word_embedding_matrix, freeze = False)
         self.emb_dropout = nn.Dropout(emb_dropout_rate)
         self.enc_lstm = nn.LSTM(init_word_embedding_matrix.size()[-1], 
@@ -701,16 +722,26 @@ class TPLinkerBiLSTM(nn.Module):
             if self.rel_add_dist:
                 shaking_hiddens4rel = shaking_hiddens + self.dist_embbedings[None,:,:].repeat(shaking_hiddens.size()[0], 1, 1)
                 
-            
-        ent_shaking_outputs = self.ent_fc(shaking_hiddens4ent)
-        
-        head_rel_shaking_outputs_list = []
-        for fc in self.head_rel_fc_list:
-            head_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
-            
-        tail_rel_shaking_outputs_list = []
-        for fc in self.tail_rel_fc_list:
-            tail_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
+        if self.is_fc_dropout:
+            ent_shaking_outputs = self.fc_dropout( self.ent_fc(shaking_hiddens4ent))
+
+            head_rel_shaking_outputs_list = []
+            for fc in self.head_rel_fc_list:
+                head_rel_shaking_outputs_list.append(self.fc_dropout( fc(shaking_hiddens4rel)))
+
+            tail_rel_shaking_outputs_list = []
+            for fc in self.tail_rel_fc_list:
+                tail_rel_shaking_outputs_list.append(self.fc_dropout( fc(shaking_hiddens4rel)))
+        else:
+            ent_shaking_outputs = self.ent_fc(shaking_hiddens4ent)
+
+            head_rel_shaking_outputs_list = []
+            for fc in self.head_rel_fc_list:
+                head_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
+
+            tail_rel_shaking_outputs_list = []
+            for fc in self.tail_rel_fc_list:
+                tail_rel_shaking_outputs_list.append(fc(shaking_hiddens4rel))
         
         head_rel_shaking_outputs = torch.stack(head_rel_shaking_outputs_list, dim = 1)
         tail_rel_shaking_outputs = torch.stack(tail_rel_shaking_outputs_list, dim = 1)

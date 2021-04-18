@@ -66,7 +66,7 @@ torch.manual_seed(hyper_parameters["seed"])  # pytorch random seed
 torch.backends.cudnn.deterministic = True
 
 # In[ ]:
-
+use_two_model=config["use_two_model"]
 data_home = config["data_home"]
 experiment_name = config["exp_name"]
 train_data_path = os.path.join(data_home, experiment_name,
@@ -102,22 +102,21 @@ if config["logger"] == "wandb":
     model_state_dict_dir = wandb.run.dir
     logger = wandb
 else:
-    logger = DefaultLogger(config["log_path"], experiment_name,
-                           config["run_name"], config["run_id"],
-                           hyper_parameters)
     model_state_dict_dir = config["path_to_save_model"]
     if not os.path.exists(model_state_dict_dir):
         os.makedirs(model_state_dict_dir)
-
+    logger = DefaultLogger(config["log_path"], experiment_name,
+                               config["run_name"], config["run_id"],
+                               hyper_parameters)
 # # Load Data
 
 # In[ ]:
 
 train_data = json.load(open(train_data_path, "r", encoding="utf-8"))
 valid_data = json.load(open(valid_data_path, "r", encoding="utf-8"))
-# with open(train_data_path+'1',"w",encoding="utf-8") as f:
+# with open(train_data_path+'-sample',"w",encoding="utf-8") as f:
 #     f.write(json.dumps(train_data[:1000]))
-# with open(valid_data_path+'1',"w",encoding="utf-8") as f:
+# with open(valid_data_path+'-sample',"w",encoding="utf-8") as f:
 #     f.write(json.dumps(valid_data[:200]))
 # # Split
 
@@ -225,31 +224,31 @@ elif config["encoder"] in {
                                   handshaking_tagger)
 
 # In[ ]:
-class PseudoDataset(Dataset):
-
-    def __init__(self, filepath):
-        number = 0
-        with open(filepath, "r") as f:
-            # 获得训练数据的总行数
-            for _ in tqdm(f, desc="load training dataset"):
-                number += 1
-        self.number = number
-        self.fopen = open(filepath, 'r')
-
-    def __len__(self):
-        return self.number
-
-    def __getitem__(self, index):
-        line = self.fopen.__next__()
-        # 自定义transform()对训练数据进行预处理
-        return line
-
-    def __getitem__(self, index):
-
-        return self.data[index]
-
-    def __len__(self):
-        return len(self.data)
+# class PseudoDataset(Dataset):
+#
+#     def __init__(self, filepath):
+#         number = 0
+#         with open(filepath, "r") as f:
+#             # 获得训练数据的总行数
+#             for _ in tqdm(f, desc="load training dataset"):
+#                 number += 1
+#         self.number = number
+#         self.fopen = open(filepath, 'r')
+#
+#     def __len__(self):
+#         return self.number
+#
+#     def __getitem__(self, index):
+#         line = self.fopen.__next__()
+#         # 自定义transform()对训练数据进行预处理
+#         return line
+#
+#     def __getitem__(self, index):
+#
+#         return self.data[index]
+#
+#     def __len__(self):
+#         return len(self.data)
 
 class MyDataset(Dataset):
     def __init__(self, data):
@@ -261,75 +260,75 @@ class MyDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-class MultiFileDataset(Dataset):
-    r"""Dataset as a concatenation of multiple file datasets.
-
-    This class is useful to assemble different existing datasets.
-
-    Args:
-        datasets (sequence): List of datasets to be concatenated
-        datasets: List[Dataset[T_co]]
-    cumulative_sizes: List[int]
-    """
-    @staticmethod
-    def cumsum_dataset(sequence):
-        r, s = [], 0
-        for e in sequence:
-            l = len(e)
-            r.append(l + s)
-            s += l
-        return r
-
-    @staticmethod
-    def cumsum_num(nums):
-        r, s = [], 0
-        for num in nums:
-            s+=num
-            r.append(s)
-        return r
-
-
-    def read_file(self,filename):
-        """
-        intelligent read
-        """
-        if self.current_filename=="":
-            self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
-        if self.current_filename != filename:
-            self.file_io.close()
-            self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
-        self.current_filename = filename
-        return pickle.load(self.file_io)
-
-    def __init__(self, trunk_sizes) -> None:
-
-        self.cumulative_sizes = self.cumsum_num(trunk_sizes)
-        self.trunk_count=len(self.cumulative_sizes)
-        self.current_filename=''
-
-    def __len__(self):
-        return self.cumulative_sizes[-1]
-
-    def __getitem__(self, idx):
-        if idx < 0:
-            if -idx > len(self):
-                raise ValueError("absolute value of index should not exceed dataset length")
-            idx = len(self) + idx
-        import bisect
-        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
-        if dataset_idx == 0:
-            sample_idx = idx
-        else:
-            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
-
-        return self.read_file(dataset_idx)[sample_idx]
-
-
-    @property
-    def cummulative_sizes(self):
-        warnings.warn("cummulative_sizes attribute is renamed to "
-                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
-        return self.cumulative_sizes
+# class MultiFileDataset(Dataset):
+#     r"""Dataset as a concatenation of multiple file datasets.
+#
+#     This class is useful to assemble different existing datasets.
+#
+#     Args:
+#         datasets (sequence): List of datasets to be concatenated
+#         datasets: List[Dataset[T_co]]
+#     cumulative_sizes: List[int]
+#     """
+#     @staticmethod
+#     def cumsum_dataset(sequence):
+#         r, s = [], 0
+#         for e in sequence:
+#             l = len(e)
+#             r.append(l + s)
+#             s += l
+#         return r
+#
+#     @staticmethod
+#     def cumsum_num(nums):
+#         r, s = [], 0
+#         for num in nums:
+#             s+=num
+#             r.append(s)
+#         return r
+#
+#
+#     def read_file(self,filename):
+#         """
+#         intelligent read
+#         """
+#         if self.current_filename=="":
+#             self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
+#         if self.current_filename != filename:
+#             self.file_io.close()
+#             self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
+#         self.current_filename = filename
+#         return pickle.load(self.file_io)
+#
+#     def __init__(self, trunk_sizes) -> None:
+#
+#         self.cumulative_sizes = self.cumsum_num(trunk_sizes)
+#         self.trunk_count=len(self.cumulative_sizes)
+#         self.current_filename=''
+#
+#     def __len__(self):
+#         return self.cumulative_sizes[-1]
+#
+#     def __getitem__(self, idx):
+#         if idx < 0:
+#             if -idx > len(self):
+#                 raise ValueError("absolute value of index should not exceed dataset length")
+#             idx = len(self) + idx
+#         import bisect
+#         dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+#         if dataset_idx == 0:
+#             sample_idx = idx
+#         else:
+#             sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+#
+#         return self.read_file(dataset_idx)[sample_idx]
+#
+#
+#     @property
+#     def cummulative_sizes(self):
+#         warnings.warn("cummulative_sizes attribute is renamed to "
+#                       "cumulative_sizes", DeprecationWarning, stacklevel=2)
+#         return self.cumulative_sizes
 
 
 # In[ ]:
@@ -386,7 +385,7 @@ if config["encoder"] == "BERT":
     hidden_size = encoder.config.hidden_size
     fake_inputs = torch.zeros(
         [hyper_parameters["batch_size"], max_seq_len, hidden_size]).to(device)
-    rel_extractor = TPLinkerBert(
+    modelf1 = TPLinkerBert(
         encoder,
         len(rel2id),
         hyper_parameters["shaking_type"],
@@ -395,6 +394,19 @@ if config["encoder"] == "BERT":
         hyper_parameters["ent_add_dist"],
         hyper_parameters["rel_add_dist"],
     )
+    if use_two_model:
+        modelf2=TPLinkerBert(
+        encoder,
+        len(rel2id),
+        hyper_parameters["shaking_type"],
+        hyper_parameters["inner_enc_type"],
+        hyper_parameters["dist_emb_size"],
+        hyper_parameters["ent_add_dist"],
+        hyper_parameters["rel_add_dist"],
+        dropout=config["student_dropout"],
+        is_dropout=True
+    )
+        modelf2.to(device)
 elif config["encoder"] in {
         "BiLSTM",
 }:
@@ -423,7 +435,7 @@ elif config["encoder"] in {
         hyper_parameters["batch_size"], max_seq_len,
         hyper_parameters["dec_hidden_size"]
     ]).to(device)
-    rel_extractor = TPLinkerBiLSTM(
+    modelf1 = TPLinkerBiLSTM(
         word_embedding_init_matrix,
         hyper_parameters["emb_dropout"],
         hyper_parameters["enc_hidden_size"],
@@ -436,22 +448,26 @@ elif config["encoder"] in {
         hyper_parameters["ent_add_dist"],
         hyper_parameters["rel_add_dist"],
     )
+    if use_two_model:
+        modelf2=TPLinkerBiLSTM(
+            word_embedding_init_matrix,
+            hyper_parameters["emb_dropout"],
+            hyper_parameters["enc_hidden_size"],
+            hyper_parameters["dec_hidden_size"],
+            hyper_parameters["rnn_dropout"],
+            len(rel2id),
+            hyper_parameters["shaking_type"],
+            hyper_parameters["inner_enc_type"],
+            hyper_parameters["dist_emb_size"],
+            hyper_parameters["ent_add_dist"],
+            hyper_parameters["rel_add_dist"],
+            fc_dropout=config["student_dropout"],
+            is_fc_dropout=True
+        )
+        modelf2.to(device)
 
-# two model
-modelf1=copy.deepcopy(rel_extractor)
-modelf2 = TPLinkerBert(
-        encoder,
-        len(rel2id),
-        hyper_parameters["shaking_type"],
-        hyper_parameters["inner_enc_type"],
-        hyper_parameters["dist_emb_size"],
-        hyper_parameters["ent_add_dist"],
-        hyper_parameters["rel_add_dist"],
-        dropout=0.4,
-        is_dropout=True
-    )
 modelf1.to(device)
-modelf2.to(device)
+
 
 # In[ ]:
 
@@ -503,7 +519,8 @@ def save_model(current,last,save_path,current_model):
 # optimizer
 init_learning_rate = float(hyper_parameters["lr"])
 optimizer1 = torch.optim.Adam(modelf1.parameters(), lr=init_learning_rate)
-optimizer2 = torch.optim.Adam(modelf2.parameters(), lr=init_learning_rate)
+if use_two_model:
+    optimizer2 = torch.optim.Adam(modelf2.parameters(), lr=init_learning_rate,weight_decay=config["student_decay"])
 
 if hyper_parameters["scheduler"] == "CAWR":
     T_mult = hyper_parameters["T_mult"]
@@ -511,18 +528,20 @@ if hyper_parameters["scheduler"] == "CAWR":
     scheduler1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer1,
         len(train_dataloader) * rewarm_epoch_num, T_mult)
-    scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer2,
-        len(train_dataloader) * rewarm_epoch_num, T_mult)
+    if use_two_model:
+        scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer2,
+            len(train_dataloader) * rewarm_epoch_num, T_mult)
 elif hyper_parameters["scheduler"] == "Step":
     decay_rate = hyper_parameters["decay_rate"]
     decay_steps = hyper_parameters["decay_steps"]
     scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer1,
                                                 step_size=decay_steps,
                                                 gamma=decay_rate)
-    scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer2,
-                                                step_size=decay_steps,
-                                                gamma=decay_rate)
+    if use_two_model:
+        scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer2,
+                                                    step_size=decay_steps,
+                                                    gamma=decay_rate)
 
 # In[ ]:
 ## utilis
@@ -762,7 +781,7 @@ def get_test_prf(pred_sample_list, gold_test_data, pattern="only_head_text"):
 # LAMBD = 0.2
 # 正常参数
 BATCH_SIZE=hyper_parameters["batch_size"]
-LABEL_OF_TRAIN = 0.1  # Label ratio
+LABEL_OF_TRAIN = config["LABEL_OF_TRAIN"]  # Label ratio
 FIRST_EPOCHS= hyper_parameters["epochs"]
 SECOND_EPOCHS= hyper_parameters["student_epochs"]
 TOTAL_EPOCHS = hyper_parameters["TOTAL_EPOCHS"]
@@ -820,64 +839,64 @@ def batch2dataset(*args):
         a.append(i)
     return a
 
-def excellent_calulate(metrics,fine_map,data):
-    # 算法要求连续产生一样的结果才行
-    """
-    Use data to calculate, then store data.
-    """
-    for one_data in data:
-        idx = one_data[0]['id'].split("_")[1]
-        if idx in fine_map:
-            last_score,last_data = fine_map[idx]
-            score = metrics.get_pseudo_rel_cpg(one_data[0], one_data[4],
-                                               last_data[6],one_data[6],
-                                               pattern="whole_text")
-            if score>=0.9:
-                if score>last_score:
-                    fine_map[idx] = (score, one_data)
-        else:
-            fine_map[idx] = (0,one_data)
-
-def exct_extract(fine_map):
-    fine_map=dict(sorted(fine_map.items(), key=lambda k_v: k_v[1][0], reverse=True))
-    exct_list=[]
-    for values in fine_map.values():
-        if values[0]>0.95:
-            exct_list.append(values[1])#只将data添加进去
-        else:
-            break
-    return exct_list
-
-def w_rel_seq_score(pre_seq,seq_val_acc):
-    """
-    first entity to a baseline,
-    then focus on relations.
-
-    """
-    enh_rate =2#系数提升几倍
-    ent_rate=6*(1-seq_val_acc[0])
-    rel_rate=6*seq_val_acc[0]
-    if seq_val_acc[0]<0.6:
-        for shaking_outputs in model_output:
-            pred_weight, label = torch.max(shaking_outputs, dim=-1)
-            pred_weight=pred_weight+torch.mul(enh_rate*label,pred_weight)
-            pred_weights.append(pred_weight)
-            sequence_weight = torch.mean(pred_weight, dim=-1)
-            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
-                sequence_weight = torch.mean(sequence_weight, dim=-1)
-            sequence_weights.append(sequence_weight)
-    else:
-        for shaking_outputs in model_output:
-            pred_weight, label = torch.max(shaking_outputs, dim=-1)
-            if len(pred_weight.shape) == 3:
-                pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
-            else:
-                pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
-            pred_weights.append(pred_weight)
-            sequence_weight = torch.mean(pred_weight, dim=-1)
-            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
-                sequence_weight = torch.mean(sequence_weight, dim=-1)
-            sequence_weights.append(sequence_weight)
+# def excellent_calulate(metrics,fine_map,data):
+#     # 算法要求连续产生一样的结果才行
+#     """
+#     Use data to calculate, then store data.
+#     """
+#     for one_data in data:
+#         idx = one_data[0]['id'].split("_")[1]
+#         if idx in fine_map:
+#             last_score,last_data = fine_map[idx]
+#             score = metrics.get_pseudo_rel_cpg(one_data[0], one_data[4],
+#                                                last_data[6],one_data[6],
+#                                                pattern="whole_text")
+#             if score>=0.9:
+#                 if score>last_score:
+#                     fine_map[idx] = (score, one_data)
+#         else:
+#             fine_map[idx] = (0,one_data)
+#
+# def exct_extract(fine_map):
+#     fine_map=dict(sorted(fine_map.items(), key=lambda k_v: k_v[1][0], reverse=True))
+#     exct_list=[]
+#     for values in fine_map.values():
+#         if values[0]>0.95:
+#             exct_list.append(values[1])#只将data添加进去
+#         else:
+#             break
+#     return exct_list
+#
+# def w_rel_seq_score(pre_seq,seq_val_acc):
+#     """
+#     first entity to a baseline,
+#     then focus on relations.
+#
+#     """
+#     enh_rate =2#系数提升几倍
+#     ent_rate=6*(1-seq_val_acc[0])
+#     rel_rate=6*seq_val_acc[0]
+#     if seq_val_acc[0]<0.6:
+#         for shaking_outputs in model_output:
+#             pred_weight, label = torch.max(shaking_outputs, dim=-1)
+#             pred_weight=pred_weight+torch.mul(enh_rate*label,pred_weight)
+#             pred_weights.append(pred_weight)
+#             sequence_weight = torch.mean(pred_weight, dim=-1)
+#             if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+#                 sequence_weight = torch.mean(sequence_weight, dim=-1)
+#             sequence_weights.append(sequence_weight)
+#     else:
+#         for shaking_outputs in model_output:
+#             pred_weight, label = torch.max(shaking_outputs, dim=-1)
+#             if len(pred_weight.shape) == 3:
+#                 pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
+#             else:
+#                 pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
+#             pred_weights.append(pred_weight)
+#             sequence_weight = torch.mean(pred_weight, dim=-1)
+#             if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+#                 sequence_weight = torch.mean(sequence_weight, dim=-1)
+#             sequence_weights.append(sequence_weight)
 
 def first_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,train_dataloader,valid_dataloader):
     for ep in range(FIRST_EPOCHS):
@@ -1205,14 +1224,14 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
             batch_new_data=batch2dataset(*(sort_input[:-3]+[sorted_spots_list]))#sorted_spots_list is pseudo label
             batch_new_data_list.extend(batch_new_data)
             # excellent_calulate(metrics, fine_map, batch_new_data)
-    if STRATEGY == 1:
-        log_dict = {
-            "use pseudo number": pseudo_count,
-            "pseudo acc": np.mean(results),
-            "time": time.time() - t_ep,
-        }
-        logger.log(log_dict)
-        pprint(log_dict)
+    # if STRATEGY == 1:
+    log_dict = {
+        "use pseudo number": pseudo_count,
+        "pseudo acc": np.mean(results),
+        "time": time.time() - t_ep,
+    }
+    logger.log(log_dict)
+    pprint(log_dict)
             # if total_epoch != TOTAL_EPOCHS-1:
             #     batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
             #     batch_new_data_list.extend(batch_new_data)
@@ -1471,7 +1490,7 @@ def test_step(teacher_model,student_model,save_res_dir,max_test_seq_len):
         print("max_tok_num: {}, less than or equal to max_test_seq_len: {}, no need to split!".format(max_tok_num,
                                                                                                       max_test_seq_len))
     max_test_seq_len = min(max_tok_num, max_test_seq_len)  # 137
-    print("max_test_seq_len: {max_test_seq_len}")
+    print(f"max_test_seq_len: {max_test_seq_len}")
     if force_split:
         split_test_data = True
         print("force to split the test dataset!")
@@ -1593,10 +1612,10 @@ train_dataloader = labeled_dataloader
 # fine_map = collections.defaultdict(tuple)  # key:train id ; value:correct number
 max_student_val=-1
 max_val=-1
+
 for total_epoch in range(TOTAL_EPOCHS):
     # Add an inner loop to judge the entire unlabeled data set finished
     print(f"Total epoch{total_epoch}:\n")
-
     seq_val_acc=first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
     # -------train f1 end---------
     # -------generate pseudo label---------
@@ -1604,45 +1623,64 @@ for total_epoch in range(TOTAL_EPOCHS):
     # -------generate pseudo label end---------
     # -------generate student data---------
     train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
-    student_train_dataloader = DataLoader(
-        train_add_dataset,  # The training samples.
-        batch_size=hyper_parameters["batch_size"],
-        shuffle=True,
-        num_workers=0,
-        drop_last=False,
-        collate_fn=functools.partial(data_maker.generate_batch, data_type="student"),
-    )
     batch_new_data_list = []
-    if sum(seq_val_acc)<1.2:
-        SECOND_EPOCHS=int(hyper_parameters["student_epochs"]*sum(seq_val_acc)//1.2)
-        print("Use teacher information.")
-        train_dataloader = DataLoader(
+    if use_two_model:
+        student_train_dataloader = DataLoader(
             train_add_dataset,  # The training samples.
             batch_size=hyper_parameters["batch_size"],
             shuffle=True,
             num_workers=0,
             drop_last=False,
-            collate_fn=data_maker.generate_batch,
+            collate_fn=functools.partial(data_maker.generate_batch, data_type="student"),
         )
-        # -------student model train---------
-        print("student training start:")
+        if sum(seq_val_acc)<1.2:
+            SECOND_EPOCHS=int(hyper_parameters["student_epochs"]*sum(seq_val_acc)//1.2)
+            print("Use teacher information.")
+            train_dataloader = DataLoader(
+                train_add_dataset,  # The training samples.
+                batch_size=hyper_parameters["batch_size"],
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                collate_fn=data_maker.generate_batch,
+            )
+            # -------student model train---------
+            print("student training start:")
 
-        seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
-                                                           student_train_dataloader, valid_dataloader, seq_val_acc)
-        # -------student model end---------
+            seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
+                                                               student_train_dataloader, valid_dataloader, seq_val_acc)
+            # -------student model end---------
+        else:
+            SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
+            print("Use student information.")
+            # -------student model train---------
+            print("student training start:")
+            seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
+                                                         student_train_dataloader,valid_dataloader,seq_val_acc)
+            # -------student model end---------
+            # -------student generate pseudo label---------
+            print("student generate pseudo")
+            batch_new_data_list = generate_pseudo(modelf2, seq_val_acc_student, unlabeled_dataloader_all, STRATEGY=0)
+            # -------generate next data---------
+            train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
+            train_dataloader = DataLoader(
+                train_add_dataset,  # The training samples.
+                batch_size=hyper_parameters["batch_size"],
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                collate_fn=data_maker.generate_batch,
+            )
+            batch_new_data_list = []
+        # save model
+        max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
+            model_state_dict_dir,
+            "model_state_dict_teacher_best.pt"), current_model=modelf1)
+        if SECOND_EPOCHS!=0:
+            max_student_val = save_model(current=sum(seq_val_acc_student), last=max_student_val, save_path=os.path.join(
+                model_state_dict_dir,
+                "model_state_dict_student_best.pt"), current_model=modelf2)
     else:
-        SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
-        print("Use student information.")
-        # -------student model train---------
-        print("student training start:")
-        seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
-                                                     student_train_dataloader,valid_dataloader,seq_val_acc)
-        # -------student model end---------
-        # -------student generate pseudo label---------
-        print("student generate pseudo")
-        batch_new_data_list = generate_pseudo(modelf2, seq_val_acc_student, unlabeled_dataloader_all, STRATEGY=0)
-        # -------generate next data---------
-        train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
         train_dataloader = DataLoader(
             train_add_dataset,  # The training samples.
             batch_size=hyper_parameters["batch_size"],
@@ -1651,15 +1689,11 @@ for total_epoch in range(TOTAL_EPOCHS):
             drop_last=False,
             collate_fn=data_maker.generate_batch,
         )
-        batch_new_data_list = []
-    # save model
-    max_val=save_model(current=sum(seq_val_acc),last=max_val,save_path=os.path.join(
-        model_state_dict_dir,
-        "model_state_dict_teacher_best.pt"),current_model=modelf1)
+        # save model
+        max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
+            model_state_dict_dir,
+            "model_state_dict_best.pt"), current_model=modelf1)
 
-    max_student_val = save_model(current=sum(seq_val_acc_student), last=max_student_val, save_path=os.path.join(
-        model_state_dict_dir,
-        "model_state_dict_student_best.pt"), current_model=modelf2)
     # # 清理尾部数据
     # if len(batch_new_data_list) > 0:  # 1000大概2~3GB
     #     # 文件流操作
@@ -1697,6 +1731,12 @@ for total_epoch in range(TOTAL_EPOCHS):
     #     )
     # exct_indexs_list=[]
     torch.cuda.empty_cache()
+    # test
+    if total_epoch == TOTAL_EPOCHS - 1 or total_epoch == TOTAL_EPOCHS - 2:
+        if use_two_model and SECOND_EPOCHS!=0:
+            test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
+        else:
+            test_step(modelf1, None, save_res_dir, max_test_seq_len)
     ## valid
     # if total_epoch>TOTAL_EPOCHS//5:
         # modelf2.eval()
@@ -1783,9 +1823,7 @@ for total_epoch in range(TOTAL_EPOCHS):
         #
         # valid_f1 = rel_prf[2]
         #
-    #test
-    if total_epoch==TOTAL_EPOCHS-1 or total_epoch==TOTAL_EPOCHS-2:
-        test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
+
 
 # ----------------------training complete-----------------------
 

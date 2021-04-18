@@ -5,8 +5,8 @@ common = {
     "exp_name": "nyt",
     "rel2id": "rel2id.json",
     "device_num": 0,
-#     "encoder": "BiLSTM",
-    "encoder": "BERT", 
+    # "encoder": "BiLSTM",
+    "encoder": "BERT",
     "hyper_parameters": {
         "shaking_type": "cat", # cat, cat_plus, cln, cln_plus; Experiments show that cat/cat_plus work better with BiLSTM, while cln/cln_plus work better with BERT. The results in the paper are produced by "cat". So, if you want to reproduce the results, "cat" is enough, no matter for BERT or BiLSTM.
         "inner_enc_type": "lstm", # valid only if cat_plus or cln_plus is set. It is the way how to encode inner tokens between each token pairs. If you only want to reproduce the results, just leave it alone.
@@ -15,20 +15,24 @@ common = {
         "rel_add_dist": False, # the same as above (for relation decoder)
         "match_pattern": "whole_text", # only_head_text (nyt_star, webnlg_star), whole_text (nyt, webnlg), only_head_index, whole_span
     },
+    "use_two_model":False,
+    "student_dropout":0.4,
+    "LABEL_OF_TRAIN":0.1,
+    "student_decay":0,# 0 equal to not decay
 }
 common["run_name"] = "{}+{}+{}".format("TP1", common["hyper_parameters"]["shaking_type"], common["encoder"]) + ""
 
 run_id = ''.join(random.sample(string.ascii_letters + string.digits, 8))
 train_config = {
-    "train_data": "train_data-sample.json",
-    "valid_data": "valid_data-sample.json",
+    "train_data": "train_data.json",
+    "valid_data": "valid_data.json",
     "rel2id": "rel2id.json",
     #"logger": "wandb", # if wandb, comment the following four lines
     
     # if logger is set as default, uncomment the following four lines
     "logger": "default",
     "run_id": run_id,
-    "log_path": "./default_log_dir/default.log",
+    "log_path": "./default_log_dir/{}/default.log".format(run_id),
     "path_to_save_model": "./default_log_dir/{}".format(run_id),
 
     # only save the model state dict if F1 score surpasses <f1_2_save>
@@ -41,9 +45,9 @@ train_config = {
     "model_state_dict_path": "",
     "hyper_parameters": {
         "batch_size": 32,
-        "TOTAL_EPOCHS":1,
-        "epochs": 10,
-        "student_epochs": 10,
+        "TOTAL_EPOCHS":15,
+        "epochs": 5,
+        "student_epochs": 4,
         "seed": 2333,
         "log_interval": 10,
         "max_seq_len": 100,
