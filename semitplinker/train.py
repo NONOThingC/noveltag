@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
 import gc
 import json
 import os
@@ -53,6 +52,7 @@ import collections
 
 # Setting
 sys.setrecursionlimit(10000)
+test_config = config.eval_config
 config = config.train_config
 hyper_parameters = config["hyper_parameters"]
 # Gpu set
@@ -65,7 +65,7 @@ torch.manual_seed(hyper_parameters["seed"])  # pytorch random seed
 torch.backends.cudnn.deterministic = True
 
 # In[ ]:
-
+use_two_model=config["use_two_model"]
 data_home = config["data_home"]
 experiment_name = config["exp_name"]
 train_data_path = os.path.join(data_home, experiment_name,
@@ -74,42 +74,48 @@ valid_data_path = os.path.join(data_home, experiment_name,
                                config["valid_data"])
 rel2id_path = os.path.join(data_home, experiment_name, config["rel2id"])
 
+# For test
+
+hyper_parameters_test = test_config["hyper_parameters"]
+data_home = test_config["data_home"]
+experiment_name = test_config["exp_name"]
+test_data_path = os.path.join(data_home, experiment_name, test_config["test_data"])
+rel2id_path = os.path.join(data_home, experiment_name, test_config["rel2id"])
+save_res_dir = os.path.join(test_config["save_res_dir"], experiment_name)
+max_test_seq_len = hyper_parameters_test["max_test_seq_len"]
+sliding_len = hyper_parameters_test["sliding_len"]
+force_split = hyper_parameters_test["force_split"]
+
 # In[ ]:
 
-# if config["logger"] == "wandb":
-#     # init wandb
-#     wandb.init(
-#         project=experiment_name,
-#         name=config["run_name"],
-#         config=hyper_parameters  # Initialize config
-#     )
-#
-#     wandb.config.note = config["note"]
-#
-#     model_state_dict_dir = wandb.run.dir
-#     logger = wandb
-# else:
-logger = DefaultLogger(config["log_path"], experiment_name,
-                       config["run_name"], config["run_id"],
-                       hyper_parameters)
-model_state_dict_dir = config["path_to_save_model"]
-if not os.path.exists(model_state_dict_dir):
-    os.makedirs(model_state_dict_dir)
-logger = DefaultLogger(config["log_path"], experiment_name,
-                       config["run_name"], config["run_id"],
-                       hyper_parameters)
-model_state_dict_dir = config["path_to_save_model"]
-if not os.path.exists(model_state_dict_dir):
-    os.makedirs(model_state_dict_dir)
+if config["logger"] == "wandb":
+    # init wandb
+    wandb.init(
+        project=experiment_name,
+        name=config["run_name"],
+        config=hyper_parameters  # Initialize config
+    )
+
+    wandb.config.note = config["note"]
+
+    model_state_dict_dir = wandb.run.dir
+    logger = wandb
+else:
+    model_state_dict_dir = config["path_to_save_model"]
+    if not os.path.exists(model_state_dict_dir):
+        os.makedirs(model_state_dict_dir)
+    logger = DefaultLogger(config["log_path"], experiment_name,
+                               config["run_name"], config["run_id"],
+                               hyper_parameters)
 # # Load Data
 
 # In[ ]:
 
 train_data = json.load(open(train_data_path, "r", encoding="utf-8"))
 valid_data = json.load(open(valid_data_path, "r", encoding="utf-8"))
-# with open(train_data_path+'1',"w",encoding="utf-8") as f:
+# with open(train_data_path+'-sample',"w",encoding="utf-8") as f:
 #     f.write(json.dumps(train_data[:1000]))
-# with open(valid_data_path+'1',"w",encoding="utf-8") as f:
+# with open(valid_data_path+'-sample',"w",encoding="utf-8") as f:
 #     f.write(json.dumps(valid_data[:200]))
 # # Split
 
@@ -128,7 +134,6 @@ elif config["encoder"] in {
         "BiLSTM",
 }:
     tokenize = lambda text: text.split(" ")
-
     def get_tok2char_span_map(text):
         tokens = text.split(" ")
         tok2char_span = []
@@ -218,31 +223,31 @@ elif config["encoder"] in {
                                   handshaking_tagger)
 
 # In[ ]:
-class PseudoDataset(Dataset):
-
-    def __init__(self, filepath):
-        number = 0
-        with open(filepath, "r") as f:
-            # 获得训练数据的总行数
-            for _ in tqdm(f, desc="load training dataset"):
-                number += 1
-        self.number = number
-        self.fopen = open(filepath, 'r')
-
-    def __len__(self):
-        return self.number
-
-    def __getitem__(self, index):
-        line = self.fopen.__next__()
-        # 自定义transform()对训练数据进行预处理
-        return line
-
-    def __getitem__(self, index):
-
-        return self.data[index]
-
-    def __len__(self):
-        return len(self.data)
+# class PseudoDataset(Dataset):
+#
+#     def __init__(self, filepath):
+#         number = 0
+#         with open(filepath, "r") as f:
+#             # 获得训练数据的总行数
+#             for _ in tqdm(f, desc="load training dataset"):
+#                 number += 1
+#         self.number = number
+#         self.fopen = open(filepath, 'r')
+#
+#     def __len__(self):
+#         return self.number
+#
+#     def __getitem__(self, index):
+#         line = self.fopen.__next__()
+#         # 自定义transform()对训练数据进行预处理
+#         return line
+#
+#     def __getitem__(self, index):
+#
+#         return self.data[index]
+#
+#     def __len__(self):
+#         return len(self.data)
 
 class MyDataset(Dataset):
     def __init__(self, data):
@@ -254,75 +259,75 @@ class MyDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-class MultiFileDataset(Dataset):
-    r"""Dataset as a concatenation of multiple file datasets.
-
-    This class is useful to assemble different existing datasets.
-
-    Args:
-        datasets (sequence): List of datasets to be concatenated
-        datasets: List[Dataset[T_co]]
-    cumulative_sizes: List[int]
-    """
-    @staticmethod
-    def cumsum_dataset(sequence):
-        r, s = [], 0
-        for e in sequence:
-            l = len(e)
-            r.append(l + s)
-            s += l
-        return r
-
-    @staticmethod
-    def cumsum_num(nums):
-        r, s = [], 0
-        for num in nums:
-            s+=num
-            r.append(s)
-        return r
-
-
-    def read_file(self,filename):
-        """
-        intelligent read
-        """
-        if self.current_filename=="":
-            self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
-        if self.current_filename != filename:
-            self.file_io.close()
-            self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
-        self.current_filename = filename
-        return pickle.load(self.file_io)
-
-    def __init__(self, trunk_sizes) -> None:
-
-        self.cumulative_sizes = self.cumsum_num(trunk_sizes)
-        self.trunk_count=len(self.cumulative_sizes)
-        self.current_filename=''
-
-    def __len__(self):
-        return self.cumulative_sizes[-1]
-
-    def __getitem__(self, idx):
-        if idx < 0:
-            if -idx > len(self):
-                raise ValueError("absolute value of index should not exceed dataset length")
-            idx = len(self) + idx
-        import bisect
-        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
-        if dataset_idx == 0:
-            sample_idx = idx
-        else:
-            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
-
-        return self.read_file(dataset_idx)[sample_idx]
-
-
-    @property
-    def cummulative_sizes(self):
-        warnings.warn("cummulative_sizes attribute is renamed to "
-                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
-        return self.cumulative_sizes
+# class MultiFileDataset(Dataset):
+#     r"""Dataset as a concatenation of multiple file datasets.
+#
+#     This class is useful to assemble different existing datasets.
+#
+#     Args:
+#         datasets (sequence): List of datasets to be concatenated
+#         datasets: List[Dataset[T_co]]
+#     cumulative_sizes: List[int]
+#     """
+#     @staticmethod
+#     def cumsum_dataset(sequence):
+#         r, s = [], 0
+#         for e in sequence:
+#             l = len(e)
+#             r.append(l + s)
+#             s += l
+#         return r
+#
+#     @staticmethod
+#     def cumsum_num(nums):
+#         r, s = [], 0
+#         for num in nums:
+#             s+=num
+#             r.append(s)
+#         return r
+#
+#
+#     def read_file(self,filename):
+#         """
+#         intelligent read
+#         """
+#         if self.current_filename=="":
+#             self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
+#         if self.current_filename != filename:
+#             self.file_io.close()
+#             self.file_io=open("Trunk" + str(filename) + ".pkl", 'rb')
+#         self.current_filename = filename
+#         return pickle.load(self.file_io)
+#
+#     def __init__(self, trunk_sizes) -> None:
+#
+#         self.cumulative_sizes = self.cumsum_num(trunk_sizes)
+#         self.trunk_count=len(self.cumulative_sizes)
+#         self.current_filename=''
+#
+#     def __len__(self):
+#         return self.cumulative_sizes[-1]
+#
+#     def __getitem__(self, idx):
+#         if idx < 0:
+#             if -idx > len(self):
+#                 raise ValueError("absolute value of index should not exceed dataset length")
+#             idx = len(self) + idx
+#         import bisect
+#         dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+#         if dataset_idx == 0:
+#             sample_idx = idx
+#         else:
+#             sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+#
+#         return self.read_file(dataset_idx)[sample_idx]
+#
+#
+#     @property
+#     def cummulative_sizes(self):
+#         warnings.warn("cummulative_sizes attribute is renamed to "
+#                       "cumulative_sizes", DeprecationWarning, stacklevel=2)
+#         return self.cumulative_sizes
 
 
 # In[ ]:
@@ -379,7 +384,7 @@ if config["encoder"] == "BERT":
     hidden_size = encoder.config.hidden_size
     fake_inputs = torch.zeros(
         [hyper_parameters["batch_size"], max_seq_len, hidden_size]).to(device)
-    rel_extractor = TPLinkerBert(
+    modelf1 = TPLinkerBert(
         encoder,
         len(rel2id),
         hyper_parameters["shaking_type"],
@@ -388,6 +393,19 @@ if config["encoder"] == "BERT":
         hyper_parameters["ent_add_dist"],
         hyper_parameters["rel_add_dist"],
     )
+    if use_two_model:
+        modelf2=TPLinkerBert(
+        encoder,
+        len(rel2id),
+        hyper_parameters["shaking_type"],
+        hyper_parameters["inner_enc_type"],
+        hyper_parameters["dist_emb_size"],
+        hyper_parameters["ent_add_dist"],
+        hyper_parameters["rel_add_dist"],
+        dropout=config["two_models_hyper_parameters"]["student_dropout"],
+        is_dropout=True
+    )
+        modelf2.to(device)
 elif config["encoder"] in {
         "BiLSTM",
 }:
@@ -416,7 +434,7 @@ elif config["encoder"] in {
         hyper_parameters["batch_size"], max_seq_len,
         hyper_parameters["dec_hidden_size"]
     ]).to(device)
-    rel_extractor = TPLinkerBiLSTM(
+    modelf1 = TPLinkerBiLSTM(
         word_embedding_init_matrix,
         hyper_parameters["emb_dropout"],
         hyper_parameters["enc_hidden_size"],
@@ -429,12 +447,26 @@ elif config["encoder"] in {
         hyper_parameters["ent_add_dist"],
         hyper_parameters["rel_add_dist"],
     )
+    if use_two_model:
+        modelf2=TPLinkerBiLSTM(
+            word_embedding_init_matrix,
+            hyper_parameters["emb_dropout"],
+            hyper_parameters["enc_hidden_size"],
+            hyper_parameters["dec_hidden_size"],
+            hyper_parameters["rnn_dropout"],
+            len(rel2id),
+            hyper_parameters["shaking_type"],
+            hyper_parameters["inner_enc_type"],
+            hyper_parameters["dist_emb_size"],
+            hyper_parameters["ent_add_dist"],
+            hyper_parameters["rel_add_dist"],
+            fc_dropout=config["two_models_hyper_parameters"]["student_dropout"],
+            is_fc_dropout=True
+        )
+        modelf2.to(device)
 
-# two model
-modelf1=copy.deepcopy(rel_extractor)
-modelf2 = copy.deepcopy(rel_extractor)
 modelf1.to(device)
-modelf2.to(device)
+
 
 # In[ ]:
 
@@ -470,20 +502,15 @@ metrics = MetricsCalculator(handshaking_tagger)
 # In[ ]:
 
 ## utils
-def save_model(current,best,save_path,model,mode):
-    if mode=="best":
-        if current >= best:
-            best = current
-            torch.save(
-                    model.state_dict(),
-                    os.path.join(
-                        model_state_dict_dir,
-                        "model_state_dict_best.pt"))
-    return best
+def save_model(current,last,save_path,current_model):
 
-
-
-
+    if current > last:
+        last = current
+        torch.save(
+                current_model.state_dict(),
+                save_path)
+        print("Best model save with: {} in save path:{}".format(last,save_path))
+    return last
 
 
 # In[ ]:
@@ -491,7 +518,8 @@ def save_model(current,best,save_path,model,mode):
 # optimizer
 init_learning_rate = float(hyper_parameters["lr"])
 optimizer1 = torch.optim.Adam(modelf1.parameters(), lr=init_learning_rate)
-optimizer2 = torch.optim.Adam(modelf2.parameters(), lr=init_learning_rate)
+if use_two_model:
+    optimizer2 = torch.optim.Adam(modelf2.parameters(), lr=init_learning_rate,weight_decay=config["two_models_hyper_parameters"]["student_decay"])
 
 if hyper_parameters["scheduler"] == "CAWR":
     T_mult = hyper_parameters["T_mult"]
@@ -499,18 +527,20 @@ if hyper_parameters["scheduler"] == "CAWR":
     scheduler1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer1,
         len(train_dataloader) * rewarm_epoch_num, T_mult)
-    scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer2,
-        len(train_dataloader) * rewarm_epoch_num, T_mult)
+    if use_two_model:
+        scheduler2 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer2,
+            len(train_dataloader) * rewarm_epoch_num, T_mult)
 elif hyper_parameters["scheduler"] == "Step":
     decay_rate = hyper_parameters["decay_rate"]
     decay_steps = hyper_parameters["decay_steps"]
     scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer1,
                                                 step_size=decay_steps,
                                                 gamma=decay_rate)
-    scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer2,
-                                                step_size=decay_steps,
-                                                gamma=decay_rate)
+    if use_two_model:
+        scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer2,
+                                                    step_size=decay_steps,
+                                                    gamma=decay_rate)
 
 # In[ ]:
 ## utilis
@@ -527,7 +557,7 @@ def move_list_to_device(input,device,**kwargs):
 ## 需要更改
 if not config["fr_scratch"]:
     model_state_path = config["model_state_dict_path"]
-    rel_extractor.load_state_dict(torch.load(model_state_path))
+    modelf1.load_state_dict(torch.load(model_state_path))
     print("------------model state {} loaded ----------------".format(
         model_state_path.split("/")[-1]))
 
@@ -571,6 +601,174 @@ def stratified_sample(dataset, ratio):
     return [Subset(dataset, sampled_indices), Subset(dataset, rest_indices)]
 
 
+def filter_duplicates(rel_list):
+    rel_memory_set = set()
+    filtered_rel_list = []
+    for rel in rel_list:
+        rel_memory = "{}\u2E80{}\u2E80{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0],
+                                                                 rel["subj_tok_span"][1],
+                                                                 rel["predicate"],
+                                                                 rel["obj_tok_span"][0],
+                                                                 rel["obj_tok_span"][1])
+        if rel_memory not in rel_memory_set:
+            filtered_rel_list.append(rel)
+            rel_memory_set.add(rel_memory)
+    return filtered_rel_list
+
+
+def predict(test_data, ori_test_data,split_test_data,model):
+    '''
+    test_data: if split, it would be samples with subtext
+    ori_test_data: the original data has not been split, used to get original text here
+    '''
+    model.eval()
+    indexed_test_data = data_maker.get_indexed_data(test_data, max_seq_len, data_type="test")  # fill up to max_seq_len
+    test_dataloader = DataLoader(MyDataset(indexed_test_data),
+                                 batch_size=hyper_parameters["batch_size"],
+                                 shuffle=False,
+                                 num_workers=6,
+                                 drop_last=False,
+                                 collate_fn=lambda data_batch: data_maker.generate_batch(data_batch, data_type="test"),
+                                 )
+
+    pred_sample_list = []
+    for batch_test_data in tqdm(test_dataloader, desc="Predicting"):
+        if config["encoder"] == "BERT":
+            sample_list, batch_input_ids, \
+            batch_attention_mask, batch_token_type_ids, \
+            tok2char_span_list, _, _, _ = batch_test_data
+
+            batch_input_ids, \
+            batch_attention_mask, \
+            batch_token_type_ids = (batch_input_ids.to(device),
+                                    batch_attention_mask.to(device),
+                                    batch_token_type_ids.to(device))
+
+        elif config["encoder"] in {"BiLSTM", }:
+            sample_list, batch_input_ids, tok2char_span_list, _, _, _ = batch_test_data
+            batch_input_ids = batch_input_ids.to(device)
+
+        with torch.no_grad():
+            if config["encoder"] == "BERT":
+                batch_ent_shaking_outputs, \
+                batch_head_rel_shaking_outputs, \
+                batch_tail_rel_shaking_outputs = model(batch_input_ids,
+                                                               batch_attention_mask,
+                                                               batch_token_type_ids,
+                                                               )
+            elif config["encoder"] in {"BiLSTM", }:
+                batch_ent_shaking_outputs, \
+                batch_head_rel_shaking_outputs, \
+                batch_tail_rel_shaking_outputs = model(batch_input_ids)
+
+        batch_ent_shaking_tag, \
+        batch_head_rel_shaking_tag, \
+        batch_tail_rel_shaking_tag = torch.argmax(batch_ent_shaking_outputs, dim=-1), \
+                                     torch.argmax(batch_head_rel_shaking_outputs, dim=-1), \
+                                     torch.argmax(batch_tail_rel_shaking_outputs, dim=-1)
+
+        for ind in range(len(sample_list)):
+            gold_sample = sample_list[ind]
+            text = gold_sample["text"]
+            text_id = gold_sample["id"]
+            tok2char_span = tok2char_span_list[ind]
+            ent_shaking_tag, \
+            head_rel_shaking_tag, \
+            tail_rel_shaking_tag = batch_ent_shaking_tag[ind], \
+                                   batch_head_rel_shaking_tag[ind], \
+                                   batch_tail_rel_shaking_tag[ind]
+
+            tok_offset, char_offset = 0, 0
+            if split_test_data:
+                tok_offset, char_offset = gold_sample["tok_offset"], gold_sample["char_offset"]
+            rel_list = handshaking_tagger.decode_rel_fr_shaking_tag(text,
+                                                                    ent_shaking_tag,
+                                                                    head_rel_shaking_tag,
+                                                                    tail_rel_shaking_tag,
+                                                                    tok2char_span,
+                                                                    tok_offset=tok_offset, char_offset=char_offset)
+            pred_sample_list.append({
+                "text": text,
+                "id": text_id,
+                "relation_list": rel_list,
+            })
+
+    # merge
+    text_id2rel_list = {}
+    for sample in pred_sample_list:
+        text_id = sample["id"]
+        if text_id not in text_id2rel_list:
+            text_id2rel_list[text_id] = sample["relation_list"]
+        else:
+            text_id2rel_list[text_id].extend(sample["relation_list"])
+
+    text_id2text = {sample["id"]: sample["text"] for sample in ori_test_data}
+    merged_pred_sample_list = []
+    for text_id, rel_list in text_id2rel_list.items():
+        merged_pred_sample_list.append({
+            "id": text_id,
+            "text": text_id2text[text_id],
+            "relation_list": filter_duplicates(rel_list),
+        })
+
+    return merged_pred_sample_list
+
+
+def get_test_prf(pred_sample_list, gold_test_data, pattern="only_head_text"):
+    text_id2gold_n_pred = {}
+    for sample in gold_test_data:
+        text_id = sample["id"]
+        text_id2gold_n_pred[text_id] = {
+            "gold_relation_list": sample["relation_list"],
+        }
+
+    for sample in pred_sample_list:
+        text_id = sample["id"]
+        text_id2gold_n_pred[text_id]["pred_relation_list"] = sample["relation_list"]
+
+    correct_num, pred_num, gold_num = 0, 0, 0
+    for gold_n_pred in text_id2gold_n_pred.values():
+        gold_rel_list = gold_n_pred["gold_relation_list"]
+        pred_rel_list = gold_n_pred["pred_relation_list"] if "pred_relation_list" in gold_n_pred else []
+        if pattern == "only_head_index":
+            gold_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0], rel["predicate"], rel["obj_tok_span"][0]) for rel
+                 in gold_rel_list])
+            pred_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0], rel["predicate"], rel["obj_tok_span"][0]) for rel
+                 in pred_rel_list])
+        elif pattern == "whole_span":
+            gold_rel_set = set(["{}\u2E80{}\u2E80{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0],
+                                                                            rel["subj_tok_span"][1], rel["predicate"],
+                                                                            rel["obj_tok_span"][0],
+                                                                            rel["obj_tok_span"][1]) for rel in
+                                gold_rel_list])
+            pred_rel_set = set(["{}\u2E80{}\u2E80{}\u2E80{}\u2E80{}".format(rel["subj_tok_span"][0],
+                                                                            rel["subj_tok_span"][1], rel["predicate"],
+                                                                            rel["obj_tok_span"][0],
+                                                                            rel["obj_tok_span"][1]) for rel in
+                                pred_rel_list])
+        elif pattern == "whole_text":
+            gold_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subject"], rel["predicate"], rel["object"]) for rel in gold_rel_list])
+            pred_rel_set = set(
+                ["{}\u2E80{}\u2E80{}".format(rel["subject"], rel["predicate"], rel["object"]) for rel in pred_rel_list])
+        elif pattern == "only_head_text":
+            gold_rel_set = set(["{}\u2E80{}\u2E80{}".format(rel["subject"].split(" ")[0], rel["predicate"],
+                                                            rel["object"].split(" ")[0]) for rel in gold_rel_list])
+            pred_rel_set = set(["{}\u2E80{}\u2E80{}".format(rel["subject"].split(" ")[0], rel["predicate"],
+                                                            rel["object"].split(" ")[0]) for rel in pred_rel_list])
+
+        for rel_str in pred_rel_set:
+            if rel_str in gold_rel_set:
+                correct_num += 1
+
+        pred_num += len(pred_rel_set)
+        gold_num += len(gold_rel_set)
+    #     print((correct_num, pred_num, gold_num))
+    prf = metrics.get_prf_scores(correct_num, pred_num, gold_num)
+    return prf
+
 # parameters
 # 测试参数
 # BATCH_SIZE=32
@@ -578,14 +776,14 @@ def stratified_sample(dataset, ratio):
 # FIRST_EPOCHS=2
 # TOTAL_EPOCHS = 1
 # MATE_EPOCHS = 2
-# seed_val = 19
+
 # LAMBD = 0.2
 # 正常参数
-BATCH_SIZE=16
-LABEL_OF_TRAIN = 0.08  # Label ratio
-FIRST_EPOCHS= 5
-TOTAL_EPOCHS = 20
-seed_val = 19
+BATCH_SIZE=hyper_parameters["batch_size"]
+LABEL_OF_TRAIN = config["LABEL_OF_TRAIN"]  # Label ratio
+FIRST_EPOCHS= hyper_parameters["epochs"]
+SECOND_EPOCHS= hyper_parameters["student_epochs"]
+TOTAL_EPOCHS = hyper_parameters["TOTAL_EPOCHS"]
 LAMBD = 0.2
 # stratified data
 labeled_dataset, unlabeled_dataset_total = stratified_sample(MyDataset(indexed_train_data),LABEL_OF_TRAIN)
@@ -627,6 +825,8 @@ valid_dataloader = DataLoader(
     collate_fn=data_maker.generate_batch,
 )
 
+
+
 # build
 def batch2dataset(*args):
     """
@@ -638,95 +838,77 @@ def batch2dataset(*args):
         a.append(i)
     return a
 
-def excellent_calulate(metrics,fine_map,data):
-    # 算法要求连续产生一样的结果才行
-    """
-    Use data to calculate, then store data.
-    """
-    for one_data in data:
-        idx = one_data[0]['id'].split("_")[1]
-        if idx in fine_map:
-            last_score,last_data = fine_map[idx]
-            score = metrics.get_pseudo_rel_cpg(one_data[0], one_data[4],
-                                               last_data[6],one_data[6],
-                                               pattern="whole_text")
-            if score>=0.9:
-                if score>last_score:
-                    fine_map[idx] = (score, one_data)
-        else:
-            fine_map[idx] = (0,one_data)
+# def excellent_calulate(metrics,fine_map,data):
+#     # 算法要求连续产生一样的结果才行
+#     """
+#     Use data to calculate, then store data.
+#     """
+#     for one_data in data:
+#         idx = one_data[0]['id'].split("_")[1]
+#         if idx in fine_map:
+#             last_score,last_data = fine_map[idx]
+#             score = metrics.get_pseudo_rel_cpg(one_data[0], one_data[4],
+#                                                last_data[6],one_data[6],
+#                                                pattern="whole_text")
+#             if score>=0.9:
+#                 if score>last_score:
+#                     fine_map[idx] = (score, one_data)
+#         else:
+#             fine_map[idx] = (0,one_data)
+#
+# def exct_extract(fine_map):
+#     fine_map=dict(sorted(fine_map.items(), key=lambda k_v: k_v[1][0], reverse=True))
+#     exct_list=[]
+#     for values in fine_map.values():
+#         if values[0]>0.95:
+#             exct_list.append(values[1])#只将data添加进去
+#         else:
+#             break
+#     return exct_list
+#
+# def w_rel_seq_score(pre_seq,seq_val_acc):
+#     """
+#     first entity to a baseline,
+#     then focus on relations.
+#
+#     """
+#     enh_rate =2#系数提升几倍
+#     ent_rate=6*(1-seq_val_acc[0])
+#     rel_rate=6*seq_val_acc[0]
+#     if seq_val_acc[0]<0.6:
+#         for shaking_outputs in model_output:
+#             pred_weight, label = torch.max(shaking_outputs, dim=-1)
+#             pred_weight=pred_weight+torch.mul(enh_rate*label,pred_weight)
+#             pred_weights.append(pred_weight)
+#             sequence_weight = torch.mean(pred_weight, dim=-1)
+#             if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+#                 sequence_weight = torch.mean(sequence_weight, dim=-1)
+#             sequence_weights.append(sequence_weight)
+#     else:
+#         for shaking_outputs in model_output:
+#             pred_weight, label = torch.max(shaking_outputs, dim=-1)
+#             if len(pred_weight.shape) == 3:
+#                 pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
+#             else:
+#                 pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
+#             pred_weights.append(pred_weight)
+#             sequence_weight = torch.mean(pred_weight, dim=-1)
+#             if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
+#                 sequence_weight = torch.mean(sequence_weight, dim=-1)
+#             sequence_weights.append(sequence_weight)
 
-def exct_extract(fine_map):
-    fine_map=dict(sorted(fine_map.items(), key=lambda k_v: k_v[1][0], reverse=True))
-    exct_list=[]
-    for values in fine_map.values():
-        if values[0]>0.95:
-            exct_list.append(values[1])#只将data添加进去
-        else:
-            break
-    return exct_list
-
-def w_rel_seq_score(pre_seq,seq_val_acc):
-    """
-    first entity to a baseline,
-    then focus on relations.
-
-    """
-    enh_rate =2#系数提升几倍
-    ent_rate=6*(1-seq_val_acc[0])
-    rel_rate=6*seq_val_acc[0]
-    if seq_val_acc[0]<0.6:
-        for shaking_outputs in model_output:
-            pred_weight, label = torch.max(shaking_outputs, dim=-1)
-            pred_weight=pred_weight+torch.mul(enh_rate*label,pred_weight)
-            pred_weights.append(pred_weight)
-            sequence_weight = torch.mean(pred_weight, dim=-1)
-            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
-                sequence_weight = torch.mean(sequence_weight, dim=-1)
-            sequence_weights.append(sequence_weight)
-    else:
-        for shaking_outputs in model_output:
-            pred_weight, label = torch.max(shaking_outputs, dim=-1)
-            if len(pred_weight.shape) == 3:
-                pred_weight = pred_weight + torch.mul(rel_rate * label, pred_weight)
-            else:
-                pred_weight = pred_weight + torch.mul(ent_rate * label, pred_weight)
-            pred_weights.append(pred_weight)
-            sequence_weight = torch.mean(pred_weight, dim=-1)
-            if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
-                sequence_weight = torch.mean(sequence_weight, dim=-1)
-            sequence_weights.append(sequence_weight)
-
-
-
-
-print("training start...\n")
-cnt = 0
-"""
-two aspect:
-1. data handle:dataloader
-2. model,loss handle
-"""
-# count how many rounds the whole big model has to train
-# a round means all unlabel data are labeled
-
-train_dataloader = labeled_dataloader
-fine_map = collections.defaultdict(tuple)  # key:train id ; value:correct number
-for total_epoch in range(TOTAL_EPOCHS):
-    # Add an inner loop to judge the entire unlabeled data set finished
-
-    print(f"Total epoch{total_epoch}:\n")
+def first_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,train_dataloader,valid_dataloader):
     for ep in range(FIRST_EPOCHS):
         ## train
-        modelf1.train()
+        model.train()
         t_ep = time.time()
-        start_lr = optimizer1.param_groups[0]['lr']
+        start_lr = optimizer.param_groups[0]['lr']
         total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
         for batch_ind, batch_train_data in enumerate(train_dataloader):
             t_batch = time.time()
             z = (2 * len(rel2id) + 1)
             steps_per_ep = len(train_dataloader)
-            total_steps = hyper_parameters[ "loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+            total_steps = hyper_parameters["loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
             current_step = steps_per_ep * ep + batch_ind
             w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)
             w_rel = min((len(rel2id) / z) * current_step / total_steps,
@@ -752,11 +934,11 @@ for total_epoch in range(TOTAL_EPOCHS):
                     batch_tail_rel_shaking_tag.to(device))
             ## concat pseudo training data
 
-            # modelf1 forward
+            # model forward
             # zero the parameter gradients
-            optimizer1.zero_grad()
+            optimizer.zero_grad()
             if config["encoder"] == "BERT":
-                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
                     batch_input_ids,
                     batch_attention_mask,
                     batch_token_type_ids,
@@ -764,18 +946,18 @@ for total_epoch in range(TOTAL_EPOCHS):
             elif config["encoder"] in {
                 "BiLSTM",
             }:
-                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
                     batch_input_ids)
 
             w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
-            loss1 = w_ent * loss_func1(
-                ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func1(
+            loss = w_ent * loss_func(
+                ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func(
                 head_rel_shaking_outputs,
-                batch_head_rel_shaking_tag) + w_rel * loss_func1(
+                batch_head_rel_shaking_tag) + w_rel * loss_func(
                 tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
 
-            loss1.backward()
-            optimizer1.step()
+            loss.backward()
+            optimizer.step()
 
             ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
                                                          batch_ent_shaking_tag)
@@ -784,11 +966,11 @@ for total_epoch in range(TOTAL_EPOCHS):
             tail_rel_sample_acc = metrics.get_sample_accuracy(
                 tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
 
-            loss1, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss1.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
+            loss, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
             ), tail_rel_sample_acc.item()
-            scheduler1.step()
+            scheduler.step()
 
-            total_loss += loss1
+            total_loss += loss
             total_ent_sample_acc += ent_sample_acc
             total_head_rel_sample_acc += head_rel_sample_acc
             total_tail_rel_sample_acc += tail_rel_sample_acc
@@ -813,7 +995,7 @@ for total_epoch in range(TOTAL_EPOCHS):
                 avg_ent_sample_acc,
                 avg_head_rel_sample_acc,
                 avg_tail_rel_sample_acc,
-                optimizer1.param_groups[0]['lr'],
+                optimizer.param_groups[0]['lr'],
                 time.time() - t_batch,
                 time.time() - t_ep,
             ),
@@ -826,7 +1008,7 @@ for total_epoch in range(TOTAL_EPOCHS):
                 "train_ent_seq_acc": avg_ent_sample_acc,
                 "train_head_rel_acc": avg_head_rel_sample_acc,
                 "train_tail_rel_acc": avg_tail_rel_sample_acc,
-                "learning_rate": optimizer1.param_groups[0]['lr'],
+                "learning_rate": optimizer.param_groups[0]['lr'],
                 "time": time.time() - t_ep,
             })
 
@@ -837,136 +1019,91 @@ for total_epoch in range(TOTAL_EPOCHS):
                 "train_ent_seq_acc": avg_ent_sample_acc,
                 "train_head_rel_acc": avg_head_rel_sample_acc,
                 "train_tail_rel_acc": avg_tail_rel_sample_acc,
-                "learning_rate": optimizer1.param_groups[0]['lr'],
+                "learning_rate": optimizer.param_groups[0]['lr'],
                 "time": time.time() - t_ep,
             })
 
-        ## valid
-        modelf1.eval()
-        t_ep = time.time()
-        total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
-        total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
-        for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+    ## valid
+    model.eval()
+    t_ep = time.time()
+    total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+    total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+    for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+        if config["encoder"] == "BERT":
+            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_attention_mask.to(device),
+                batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        elif config["encoder"] in {
+            "BiLSTM",
+        }:
+            sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        with torch.no_grad():
             if config["encoder"] == "BERT":
-                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
-
-                batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                    batch_input_ids.to(device), batch_attention_mask.to(device),
-                    batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
-                    batch_head_rel_shaking_tag.to(device),
-                    batch_tail_rel_shaking_tag.to(device))
-
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids,
+                    batch_attention_mask,
+                    batch_token_type_ids,
+                )
             elif config["encoder"] in {
                 "BiLSTM",
             }:
-                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids)
 
-                batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                    batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
-                    batch_head_rel_shaking_tag.to(device),
-                    batch_tail_rel_shaking_tag.to(device))
+        ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                     batch_ent_shaking_tag)
+        head_rel_sample_acc = metrics.get_sample_accuracy(
+            head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+        tail_rel_sample_acc = metrics.get_sample_accuracy(
+            tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
 
-            with torch.no_grad():
-                if config["encoder"] == "BERT":
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids,
-                        batch_attention_mask,
-                        batch_token_type_ids,
-                    )
-                elif config["encoder"] in {
-                    "BiLSTM",
-                }:
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids)
+        ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = ent_sample_acc.item(), head_rel_sample_acc.item(
+        ), tail_rel_sample_acc.item()
 
-            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                         batch_ent_shaking_tag)
-            head_rel_sample_acc = metrics.get_sample_accuracy(
-                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-            tail_rel_sample_acc = metrics.get_sample_accuracy(
-                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+        total_ent_sample_acc += ent_sample_acc
+        total_head_rel_sample_acc += head_rel_sample_acc
+        total_tail_rel_sample_acc += tail_rel_sample_acc
 
+    avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+    avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+    avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
 
-            ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc= ent_sample_acc.item(), head_rel_sample_acc.item(
-            ), tail_rel_sample_acc.item()
+    log_dict = {
+        "val_ent_seq_acc": avg_ent_sample_acc,
+        "val_head_rel_acc": avg_head_rel_sample_acc,
+        "val_tail_rel_acc": avg_tail_rel_sample_acc,
+        "time": time.time() - t_ep,
+    }
+    logger.log(log_dict)
+    pprint(log_dict)
 
+    return (avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)
 
-            total_ent_sample_acc += ent_sample_acc
-            total_head_rel_sample_acc += head_rel_sample_acc
-            total_tail_rel_sample_acc += tail_rel_sample_acc
-
-
-
-        avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
-        avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
-        avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
-
-        # rel_prf = metrics.get_prf_scores(total_rel_correct_num,
-        #                                  total_rel_pred_num,
-        #                                  total_rel_gold_num)
-
-        # log_dict = {
-        #     "val_ent_seq_acc": avg_ent_sample_acc,
-        #     "val_head_rel_acc": avg_head_rel_sample_acc,
-        #     "val_tail_rel_acc": avg_tail_rel_sample_acc,
-        #     "val_prec": rel_prf[0],
-        #     "val_recall": rel_prf[1],
-        #     "val_f1": rel_prf[2],
-        #     "time": time.time() - t_ep,
-        # }
-        log_dict = {
-            "val_ent_seq_acc": avg_ent_sample_acc,
-            "val_head_rel_acc": avg_head_rel_sample_acc,
-            "val_tail_rel_acc": avg_tail_rel_sample_acc,
-            "time": time.time() - t_ep,
-        }
-        logger.log(log_dict)
-        pprint(log_dict)
-
-    seq_val_acc=(avg_ent_sample_acc,avg_head_rel_sample_acc,avg_tail_rel_sample_acc)
-        # valid_f1 = rel_prf[2]
-
-        ## save when better
-        # if valid_f1 >= max_f1:
-        #     max_f1 = valid_f1
-        #     if valid_f1 > config["f1_2_save"]:  # save the best model
-        #         modle_state_num = len(
-        #             glob.glob(model_state_dict_dir + "/model_state_dict_*.pt"))
-        #         torch.save(
-        #             model.state_dict(),
-        #             os.path.join(
-        #                 model_state_dict_dir,
-        #                 "model_state_dict_{}.pt".format(modle_state_num)))
-
-        # save best
-        # if valid_f1 >= max_f1:
-        #     max_f1 = valid_f1
-        #     if valid_f1 > config["f1_2_save"]:  # save the best model
-        #         torch.save(
-        #             modelf1.state_dict(),
-        #             os.path.join(
-        #                 model_state_dict_dir,
-        #                 "model_state_dict_best.pt"))
-    #                 scheduler_state_num = len(glob.glob(schedule_state_dict_dir + "/scheduler_state_dict_*.pt"))
-    #                 torch.save(scheduler.state_dict(), os.path.join(schedule_state_dict_dir, "scheduler_state_dict_{}.pt".format(scheduler_state_num)))    print("Current avf_f1: {}, Best f1: {}".format(valid_f1, max_f1))
-    # -------train f1 end---------
-    # -------generate pseudo label---------
-    #
-    print("generate pseudo label\n")
-    Z = 12  # Incremental Epoch Number
-    Z_RATIO = ((sum(seq_val_acc)//3)-0.05)*BATCH_SIZE
+def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
+    if STRATEGY == 1:
+        Z_RATIO = 3.074*(sum(seq_val_acc)**0.162)-2.699
+    else:
+        Z_RATIO= config["strategy_hyper_parameters"]["Z_RATIO"]
+    print(f"generate pseudo label，Z_RATIO：{Z_RATIO}, NUMBER: {int(Z_RATIO*BATCH_SIZE)} \n")
     ## valid
     modelf1.eval()
     t_ep = time.time()
-    all_gold_labels = []
-    all_pred_labels = []
 
     pseudo_count = 0
     batch_new_data_list=[]
     # 注意，这里更新了train_loader
-    train_dataloader = labeled_dataloader
-    trunk_count=0
-    size_count=[]
+
     results = []
     for batch_ind, batch_valid_data in enumerate(tqdm(unlabeled_dataloader_all, desc="Validating")):
 
@@ -1012,9 +1149,14 @@ for total_epoch in range(TOTAL_EPOCHS):
             sort_indexs = []
             # fine_indexs= []
             model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
-            enh_rate = 2  # 系数提升几倍
-            ent_rate = 5 *  seq_val_acc[0]
-            rel_rate = 5 * (seq_val_acc[1]+seq_val_acc[2]) # From valid step
+            if STRATEGY == 1:
+                enh_rate = config["strategy_hyper_parameters"]["enh_rate"]  # 系数提升几倍
+                ent_rate = config["strategy_hyper_parameters"]["ent_rate"] *  seq_val_acc[0]
+                rel_rate = config["strategy_hyper_parameters"]["rel_rate"] * (seq_val_acc[1]+seq_val_acc[2]) # From valid step
+            else:
+                enh_rate=1
+                ent_rate=1
+                rel_rate=1
             if seq_val_acc[0] < 0.6:
                 for shaking_outputs in model_output:
                     pred_weight, label = torch.max(shaking_outputs, dim=-1)
@@ -1036,14 +1178,11 @@ for total_epoch in range(TOTAL_EPOCHS):
                     if len(sequence_weight.shape) == 2:  # entity\head\rel的分数综合考虑
                         sequence_weight = torch.mean(sequence_weight, dim=-1)
                     sequence_weights.append(sequence_weight)
-
                 # fine_indexs.append(set(fine_index.tolist()))
-
             # # Pseudo Label Selection, top Z%
-
             final_sequence_weight = sum(sequence_weights)
             final_sort = torch.argsort(final_sequence_weight, descending=True)
-            final_sort = final_sort[0:int(len(final_sort) * Z_RATIO) if int(len(final_sort) * Z_RATIO)>0 else 1]
+            final_sort = final_sort[:int(len(final_sort) * Z_RATIO) if int(len(final_sort) * Z_RATIO)>0 else 1]
             inter_index = final_sort
             sort_input=[]
             for var in batch_valid_data:
@@ -1059,30 +1198,47 @@ for total_epoch in range(TOTAL_EPOCHS):
             pseudo_count += len(inter_index)
             #此操作耗时，得到序号inter_index再解析
             sorted_spots_list = []
-
             for i in inter_index:
                 sorted_spots_list.append((handshaking_tagger.get_sharing_spots_fr_shaking_tag(batch_pred_ent_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_head_rel_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_tail_rel_shaking_tag[i])))
                 # sorted_spots_list.append(matrix_spots_list[i])
             for i in range(3):
                 results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]).item())
             print("Pseudo label acc is:{}".format(np.mean(results)))
+            # else:#student strategy
+            #     sort_input = []
+            #     for var in batch_valid_data:
+            #         if isinstance(var, torch.Tensor):
+            #             sort_input.append(var.to("cpu"))
+            #         elif isinstance(var, list):
+            #             sort_input.append([var])
+            #         else:
+            #             raise Exception
+            #     sorted_spots_list = []
+            #     for i in range(batch_pred_ent_shaking_tag.shape[0]):
+            #         sorted_spots_list.append((handshaking_tagger.get_sharing_spots_fr_shaking_tag(
+            #             batch_pred_ent_shaking_tag[i]), handshaking_tagger.get_spots_fr_shaking_tag(
+            #             batch_pred_head_rel_shaking_tag[i]), handshaking_tagger.get_spots_fr_shaking_tag(
+            #             batch_pred_tail_rel_shaking_tag[i])))
+
             # pred_id = torch.argmax(pred, dim=-1)
             # # (batch_size, ..., seq_len) -> (batch_size, )，把每个sample压成一条seq
             # pred_id = pred_id.view(pred_id.size()[0], -1)
             # record id and corresponding label
             # update training data
-
-
             batch_new_data=batch2dataset(*(sort_input[:-3]+[sorted_spots_list]))#sorted_spots_list is pseudo label
             batch_new_data_list.extend(batch_new_data)
             # excellent_calulate(metrics, fine_map, batch_new_data)
-
-
+    # if STRATEGY == 1:
+    log_dict = {
+        "use pseudo number": pseudo_count,
+        "pseudo acc": np.mean(results),
+        "time": time.time() - t_ep,
+    }
+    logger.log(log_dict)
+    pprint(log_dict)
             # if total_epoch != TOTAL_EPOCHS-1:
             #     batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
             #     batch_new_data_list.extend(batch_new_data)
-
-
             # if len(batch_new_data_list)>trunk_size:#1000大概20~30GB
             #     # 文件流操作
             #     print("Trunk {}".format(trunk_count))
@@ -1094,18 +1250,453 @@ for total_epoch in range(TOTAL_EPOCHS):
             #     train_add_dataset=0
             #     batch_new_data_list = []
             #     print("Trunk end")
+    return batch_new_data_list
 
+def student_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,train_dataloader,valid_dataloader,seq_val_acc):
+    if FIRST_EPOCHS == 0:
+        return [0]
+    mu=1
+    ent_p=seq_val_acc[0]/3 if seq_val_acc[0]>0.6 else seq_val_acc[0]
+    rel_p=seq_val_acc[0] if (seq_val_acc[1]+seq_val_acc[2])/2<0.2 else (seq_val_acc[1]+seq_val_acc[2])/2
+    for ep in range(FIRST_EPOCHS):
+        ## train
+        model.train()
+        t_ep = time.time()
+        start_lr = optimizer.param_groups[0]['lr']
+        total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+        for batch_ind, batch_train_data in enumerate(train_dataloader):
+            t_batch = time.time()
+            z = (2 * len(rel2id) + 1)
+            steps_per_ep = len(train_dataloader)
+            total_steps = hyper_parameters["loss_weight_recover_steps"] + 1  # + 1 avoid division by zero error
+            current_step = steps_per_ep * ep + batch_ind
+            w_ent = max(1 / z + 1 - current_step / total_steps, 1 / z)*ent_p
+            w_rel = min((len(rel2id) / z) * current_step / total_steps,
+                        (len(rel2id) / z))* rel_p
+            loss_weights = {"ent": w_ent, "rel": w_rel}
 
-            # 给标记成合适的数据格式
-            # 数据筛选(三个维度应采用一个指标筛选进来)
+            if config["encoder"] == "BERT":
+                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,pseudo_flag,batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+                batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_attention_mask.to(device),
+                    batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
 
+            elif config["encoder"] in {
+                "BiLSTM",
+            }:
+                sample_list, batch_input_ids, tok2char_span_list,pseudo_flag, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
+
+                batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                    batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                    batch_head_rel_shaking_tag.to(device),
+                    batch_tail_rel_shaking_tag.to(device))
+            ## concat pseudo training data
+
+            # model forward
+            # zero the parameter gradients
+            optimizer.zero_grad()
+            if config["encoder"] == "BERT":
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids,
+                    batch_attention_mask,
+                    batch_token_type_ids,
+                )
+            elif config["encoder"] in {
+                "BiLSTM",
+            }:
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids)
+            factor=1+(mu-1)*sum(pseudo_flag)/len(pseudo_flag)
+            w_ent, w_rel = loss_weights["ent"], loss_weights["rel"]
+            loss =factor*( w_ent * loss_func(
+                ent_shaking_outputs, batch_ent_shaking_tag) + w_rel * loss_func(
+                head_rel_shaking_outputs,
+                batch_head_rel_shaking_tag) + w_rel * loss_func(
+                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag))
+
+            loss.backward()
+            optimizer.step()
+
+            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                         batch_ent_shaking_tag)
+            head_rel_sample_acc = metrics.get_sample_accuracy(
+                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+            tail_rel_sample_acc = metrics.get_sample_accuracy(
+                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+            loss, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = loss.item(), ent_sample_acc.item(), head_rel_sample_acc.item(
+            ), tail_rel_sample_acc.item()
+            scheduler.step()
+
+            total_loss += loss
+            total_ent_sample_acc += ent_sample_acc
+            total_head_rel_sample_acc += head_rel_sample_acc
+            total_tail_rel_sample_acc += tail_rel_sample_acc
+
+            avg_loss = total_loss / (batch_ind + 1)
+            avg_ent_sample_acc = total_ent_sample_acc / (batch_ind + 1)
+            avg_head_rel_sample_acc = total_head_rel_sample_acc / (batch_ind +
+                                                                   1)
+            avg_tail_rel_sample_acc = total_tail_rel_sample_acc / (batch_ind +
+                                                                   1)
+
+            batch_print_format = "\rproject: {}, run_name: {}, Epoch: {}/{}, batch: {}/{}, train_loss: {}, " + "t_ent_sample_acc: {}, t_head_rel_sample_acc: {}, t_tail_rel_sample_acc: {}," + "lr: {}, batch_time: {}, total_time: {} -------------"
+
+            print(batch_print_format.format(
+                experiment_name,
+                config["run_name"],
+                ep + 1,
+                FIRST_EPOCHS,
+                batch_ind + 1,
+                len(train_dataloader),
+                avg_loss,
+                avg_ent_sample_acc,
+                avg_head_rel_sample_acc,
+                avg_tail_rel_sample_acc,
+                optimizer.param_groups[0]['lr'],
+                time.time() - t_batch,
+                time.time() - t_ep,
+            ),
+                end="")
+
+        if config["logger"] == "wandb" and batch_ind % hyper_parameters[
+            "log_interval"] == 0:
+            logger.log({
+                "train_loss": avg_loss,
+                "train_ent_seq_acc": avg_ent_sample_acc,
+                "train_head_rel_acc": avg_head_rel_sample_acc,
+                "train_tail_rel_acc": avg_tail_rel_sample_acc,
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "time": time.time() - t_ep,
+            })
+
+        if config[
+            "logger"] != "wandb":  # only log once for training if logger is not wandb
+            logger.log({
+                "train_loss": avg_loss,
+                "train_ent_seq_acc": avg_ent_sample_acc,
+                "train_head_rel_acc": avg_head_rel_sample_acc,
+                "train_tail_rel_acc": avg_tail_rel_sample_acc,
+                "learning_rate": optimizer.param_groups[0]['lr'],
+                "time": time.time() - t_ep,
+            })
+
+    ## valid
+    model.eval()
+    t_ep = time.time()
+    total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+    total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+    for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+        if config["encoder"] == "BERT":
+            sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_attention_mask.to(device),
+                batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        elif config["encoder"] in {
+            "BiLSTM",
+        }:
+            sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+
+            batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+                batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+                batch_head_rel_shaking_tag.to(device),
+                batch_tail_rel_shaking_tag.to(device))
+
+        with torch.no_grad():
+            if config["encoder"] == "BERT":
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids,
+                    batch_attention_mask,
+                    batch_token_type_ids,
+                )
+            elif config["encoder"] in {
+                "BiLSTM",
+            }:
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = model(
+                    batch_input_ids)
+
+        ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+                                                     batch_ent_shaking_tag)
+        head_rel_sample_acc = metrics.get_sample_accuracy(
+            head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+        tail_rel_sample_acc = metrics.get_sample_accuracy(
+            tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+
+        ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = ent_sample_acc.item(), head_rel_sample_acc.item(
+        ), tail_rel_sample_acc.item()
+
+        total_ent_sample_acc += ent_sample_acc
+        total_head_rel_sample_acc += head_rel_sample_acc
+        total_tail_rel_sample_acc += tail_rel_sample_acc
+
+    avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+    avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+    avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+
+    # rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+    #                                  total_rel_pred_num,
+    #                                  total_rel_gold_num)
+
+    # log_dict = {
+    #     "val_ent_seq_acc": avg_ent_sample_acc,
+    #     "val_head_rel_acc": avg_head_rel_sample_acc,
+    #     "val_tail_rel_acc": avg_tail_rel_sample_acc,
+    #     "val_prec": rel_prf[0],
+    #     "val_recall": rel_prf[1],
+    #     "val_f1": rel_prf[2],
+    #     "time": time.time() - t_ep,
+    # }
     log_dict = {
-                "use pseudo number": pseudo_count,
-                "pseudo acc":np.mean(results),
-               "time": time.time() - t_ep,
+        "student val_ent_seq_acc": avg_ent_sample_acc,
+        "student val_head_rel_acc": avg_head_rel_sample_acc,
+        "student val_tail_rel_acc": avg_tail_rel_sample_acc,
+        "time": time.time() - t_ep,
     }
     logger.log(log_dict)
     pprint(log_dict)
+
+    return (avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)
+
+
+
+
+
+def test_step(teacher_model,student_model,save_res_dir,max_test_seq_len):
+    # For test
+    test_data_path_dict = {}
+    for file_path in glob.glob(test_data_path):
+        file_name = re.search("(.*?)\.json", file_path.split("/")[-1]).group(1)
+        test_data_path_dict[file_name] = file_path
+    test_data_dict = {}  # filename2data
+    for file_name, path in test_data_path_dict.items():
+        test_data_dict[file_name] = json.load(open(path, "r", encoding="utf-8"))
+    all_data = []  # 数据全加入alldata中
+    for data in list(test_data_dict.values()):
+        all_data.extend(data)
+
+    max_tok_num = 0
+    for sample in tqdm(all_data, desc="Calculate the max token number"):
+        tokens = tokenize(sample["text"])
+        max_tok_num = max(len(tokens), max_tok_num)
+
+    split_test_data = False
+    if max_tok_num > max_test_seq_len:
+        split_test_data = True
+        print("max_tok_num: {}, lagger than max_test_seq_len: {}, test data will be split!".format(max_tok_num,
+                                                                                                   max_test_seq_len))
+    else:
+        print("max_tok_num: {}, less than or equal to max_test_seq_len: {}, no need to split!".format(max_tok_num,
+                                                                                                      max_test_seq_len))
+    max_test_seq_len = min(max_tok_num, max_test_seq_len)  # 137
+    print(f"max_test_seq_len: {max_test_seq_len}")
+    if force_split:
+        split_test_data = True
+        print("force to split the test dataset!")
+
+    ori_test_data_dict = copy.deepcopy(test_data_dict)
+    if split_test_data:
+        test_data_dict = {}
+        for file_name, data in ori_test_data_dict.items():
+            test_data_dict[file_name] = preprocessor.split_into_short_samples(data,
+                                                                              max_seq_len,
+                                                                              sliding_len=sliding_len,
+                                                                              encoder=test_config["encoder"],
+                                                                              data_type="test")
+
+    # get model state paths
+    model_state_dir = test_config["model_state_dict_dir"]
+    target_run_ids = set(test_config["run_ids"])
+    run_id2model_state_paths = {}  # model state path是由id来命名的
+    # for root, dirs, files in os.walk(
+    #         model_state_dir):  # 对这个目录及其子目录都进行访问，找出target_run_ids界定的那些ids并存到runid2modelstatepath中
+    #     for file_name in files:
+    #         #         set_trace()
+    #         run_id = root.split("/")[-1].split("-")[-1]
+    #         if re.match(".*model_state.*\.pt", file_name) and run_id in target_run_ids:
+    #             if run_id not in run_id2model_state_paths:
+    #                 run_id2model_state_paths[run_id] = []
+    #             model_state_path = os.path.join(root, file_name)
+    #             run_id2model_state_paths[run_id].append(model_state_path)
+
+    res_dict = {}
+    predict_statistics = {}
+    save_dir4run = os.path.join(save_res_dir, config["run_id"])
+    if test_config["save_res"] and not os.path.exists(save_dir4run):
+        os.makedirs(save_dir4run)
+
+    for file_name, short_data in test_data_dict.items():
+        res_num = 0  # re.search("(\d+)", model_state_path.split("/")[-1]).group(1)
+        # if len(res_num) == 0:
+        #     res_num = 0
+        save_path = os.path.join(save_dir4run, "{}_res_{}.json".format(file_name, res_num))
+        # if os.path.exists(save_path):
+        #     pred_sample_list = [json.loads(line) for line in open(save_path, "r", encoding="utf-8")]
+        #     print("{} already exists, load it directly!".format(save_path))
+        # else:
+        #     # predict
+        ori_test_data = ori_test_data_dict[file_name]
+        pred_sample_list = predict(short_data, ori_test_data, split_test_data, teacher_model)
+
+        res_dict[save_path] = pred_sample_list
+        predict_statistics[save_path] = len([s for s in pred_sample_list if len(s["relation_list"]) > 0])
+        pprint(predict_statistics)
+        if student_model is not None:
+            save_path_student=os.path.join(save_dir4run, "{}_res_{}.json".format(file_name, res_num+1))
+            # if os.path.exists(save_path_student):
+            #     pred_sample_list_student = [json.loads(line) for line in open(save_path_student, "r", encoding="utf-8")]
+            #     print("{} already exists, load it directly!".format(save_path_student))
+            # else:
+            #     # predict
+            ori_test_data = ori_test_data_dict[file_name]
+            pred_sample_list_student = predict(short_data, ori_test_data, split_test_data, student_model)
+            res_dict[save_path_student] = pred_sample_list_student
+            predict_statistics[save_path_student] = len([s for s in pred_sample_list_student if len(s["relation_list"]) > 0])
+
+    # check
+    for path, res in res_dict.items():
+        for sample in tqdm(res, desc="check char span"):
+            text = sample["text"]
+            for rel in sample["relation_list"]:
+                assert rel["subject"] == text[rel["subj_char_span"][0]:rel["subj_char_span"][1]]
+                assert rel["object"] == text[rel["obj_char_span"][0]:rel["obj_char_span"][1]]
+
+    # save
+    if test_config["save_res"]:
+        for path, res in res_dict.items():
+            with open(path, "w", encoding="utf-8") as file_out:
+                for sample in tqdm(res, desc="Output"):
+                    if len(sample["relation_list"]) == 0:
+                        continue
+                    json_line = json.dumps(sample, ensure_ascii=False)
+                    file_out.write("{}\n".format(json_line))
+
+    # score
+    if test_config["score"]:
+        score_dict = {}
+        correct = hyper_parameters_test["match_pattern"]
+        #     correct = "whole_text"
+        for file_path, pred_samples in res_dict.items():
+            run_id = file_path.split("/")[-2]
+            file_name = re.search("(.*?)_res_\d+\.json", file_path.split("/")[-1]).group(1)
+            gold_test_data = ori_test_data_dict[file_name]
+            prf = get_test_prf(pred_samples, gold_test_data, pattern=correct)
+            if run_id not in score_dict:
+                score_dict[run_id] = {}
+            score_dict[run_id][file_name] = prf
+            log_dict = {
+                "run_id": run_id,
+                "type":file_name,
+                "test_prec": prf[0],
+                "val_recall": prf[1],
+                "val_f1": prf[2],
+            }
+            logger.log(log_dict)
+        print("---------------- Results -----------------------")
+        pprint(score_dict)
+
+
+
+
+print("training start...\n")
+cnt = 0
+"""
+two aspect:
+1. data handle:dataloader
+2. model,loss handle
+"""
+# count how many rounds the whole big model has to train
+# a round means all unlabel data are labeled
+train_dataloader = labeled_dataloader
+# fine_map = collections.defaultdict(tuple)  # key:train id ; value:correct number
+max_student_val=-1
+max_val=-1
+
+for total_epoch in range(TOTAL_EPOCHS):
+    # Add an inner loop to judge the entire unlabeled data set finished
+    print(f"Total epoch{total_epoch}:\n")
+    seq_val_acc=first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
+    # -------train f1 end---------
+    # -------generate pseudo label---------
+    batch_new_data_list=generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=config["use_strategy"])
+    # -------generate pseudo label end---------
+    # -------generate student data---------
+    train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
+    batch_new_data_list = []
+    if use_two_model:
+        student_train_dataloader = DataLoader(
+            train_add_dataset,  # The training samples.
+            batch_size=hyper_parameters["batch_size"],
+            shuffle=True,
+            num_workers=0,
+            drop_last=False,
+            collate_fn=functools.partial(data_maker.generate_batch, data_type="student"),
+        )
+        if sum(seq_val_acc)<1.2:
+            SECOND_EPOCHS=int(hyper_parameters["student_epochs"]*sum(seq_val_acc)//1.2)
+            print("Use teacher information.")
+            train_dataloader = DataLoader(
+                train_add_dataset,  # The training samples.
+                batch_size=hyper_parameters["batch_size"],
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                collate_fn=data_maker.generate_batch,
+            )
+            # -------student model train---------
+            print("student training start:")
+            seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
+                                                               student_train_dataloader, valid_dataloader, seq_val_acc)
+            # -------student model end---------
+        else:
+            SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
+            print("Use student information.")
+            # -------student model train---------
+            print("student training start:")
+            seq_val_acc_student=student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
+                                                         student_train_dataloader,valid_dataloader,seq_val_acc)
+            # -------student model end---------
+            # -------student generate pseudo label---------
+            print("student generate pseudo")
+            batch_new_data_list = generate_pseudo(modelf2, seq_val_acc_student, unlabeled_dataloader_all, STRATEGY=config["use_strategy"])
+            # -------generate next data---------
+            train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
+            train_dataloader = DataLoader(
+                train_add_dataset,  # The training samples.
+                batch_size=hyper_parameters["batch_size"],
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                collate_fn=data_maker.generate_batch,
+            )
+            batch_new_data_list = []
+        # save model
+        max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
+            model_state_dict_dir,
+            "model_state_dict_teacher_best.pt"), current_model=modelf1)
+        if SECOND_EPOCHS!=0:
+            max_student_val = save_model(current=sum(seq_val_acc_student), last=max_student_val, save_path=os.path.join(
+                model_state_dict_dir,
+                "model_state_dict_student_best.pt"), current_model=modelf2)
+    else:
+        train_dataloader = DataLoader(
+            train_add_dataset,  # The training samples.
+            batch_size=hyper_parameters["batch_size"],
+            shuffle=True,
+            num_workers=0,
+            drop_last=False,
+            collate_fn=data_maker.generate_batch,
+        )
+        # save model
+        max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
+            model_state_dict_dir,
+            "model_state_dict_best.pt"), current_model=modelf1)
+
     # # 清理尾部数据
     # if len(batch_new_data_list) > 0:  # 1000大概2~3GB
     #     # 文件流操作
@@ -1128,15 +1719,7 @@ for total_epoch in range(TOTAL_EPOCHS):
     #         drop_last=False,
     #         collate_fn=data_maker.generate_batch,
     #     )
-    train_add_dataset = train_dataloader.dataset + MyDataset(batch_new_data_list)
-    train_dataloader = DataLoader(
-        train_add_dataset,  # The training samples.
-        batch_size=hyper_parameters["batch_size"],
-        shuffle=True,
-        num_workers=0,
-        drop_last=False,
-        collate_fn=data_maker.generate_batch,
-    )
+
     # exct_indexs_list = exct_extract(fine_map)
     # if len(exct_indexs_list)!=0:
     #     pprint({"excellent set: {}".format(len(exct_indexs_list))})
@@ -1150,93 +1733,100 @@ for total_epoch in range(TOTAL_EPOCHS):
     #         collate_fn=data_maker.generate_batch,
     #     )
     # exct_indexs_list=[]
-    batch_new_data_list=[]
     torch.cuda.empty_cache()
+    # test
+    if total_epoch == TOTAL_EPOCHS - 1 or total_epoch == TOTAL_EPOCHS - 2:
+        if use_two_model and SECOND_EPOCHS!=0:
+            test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
+        else:
+            test_step(modelf1, None, save_res_dir, max_test_seq_len)
     ## valid
-    if total_epoch==TOTAL_EPOCHS-1:
-        modelf1.eval()
-        t_ep = time.time()
-        total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
-        total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
-        for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
-            if config["encoder"] == "BERT":
-                sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+    # if total_epoch>TOTAL_EPOCHS//5:
+        # modelf2.eval()
+        # t_ep = time.time()
+        # total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0.
+        # total_rel_correct_num, total_rel_pred_num, total_rel_gold_num = 0, 0, 0
+        # for batch_ind, batch_valid_data in enumerate(tqdm(valid_dataloader, desc="Validating")):
+        #     if config["encoder"] == "BERT":
+        #         sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+        #
+        #         batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+        #             batch_input_ids.to(device), batch_attention_mask.to(device),
+        #             batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
+        #             batch_head_rel_shaking_tag.to(device),
+        #             batch_tail_rel_shaking_tag.to(device))
+        #
+        #     elif config["encoder"] in {
+        #         "BiLSTM",
+        #     }:
+        #         sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
+        #
+        #         batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
+        #             batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
+        #             batch_head_rel_shaking_tag.to(device),
+        #             batch_tail_rel_shaking_tag.to(device))
+        #
+        #     with torch.no_grad():
+        #         if config["encoder"] == "BERT":
+        #             ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
+        #                 batch_input_ids,
+        #                 batch_attention_mask,
+        #                 batch_token_type_ids,
+        #             )
+        #         elif config["encoder"] in {
+        #             "BiLSTM",
+        #         }:
+        #             ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf2(
+        #                 batch_input_ids)
+        #
+        #     ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
+        #                                                  batch_ent_shaking_tag)
+        #     head_rel_sample_acc = metrics.get_sample_accuracy(
+        #         head_rel_shaking_outputs, batch_head_rel_shaking_tag)
+        #     tail_rel_sample_acc = metrics.get_sample_accuracy(
+        #         tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
+        #
+        #     rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
+        #                                   ent_shaking_outputs,
+        #                                   head_rel_shaking_outputs,
+        #                                   tail_rel_shaking_outputs,
+        #                                   hyper_parameters["match_pattern"])
+        #
+        #     ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg =  ent_sample_acc.item(), head_rel_sample_acc.item(
+        #     ), tail_rel_sample_acc.item(), rel_cpg
+        #
+        #
+        #     total_ent_sample_acc += ent_sample_acc
+        #     total_head_rel_sample_acc += head_rel_sample_acc
+        #     total_tail_rel_sample_acc += tail_rel_sample_acc
+        #
+        #     total_rel_correct_num += rel_cpg[0]
+        #     total_rel_pred_num += rel_cpg[1]
+        #     total_rel_gold_num += rel_cpg[2]
+        #
+        # avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
+        # avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
+        # avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
+        #
+        # rel_prf = metrics.get_prf_scores(total_rel_correct_num,
+        #                                  total_rel_pred_num,
+        #                                  total_rel_gold_num)
+        #
+        # log_dict = {
+        #     "val_ent_seq_acc": avg_ent_sample_acc,
+        #     "val_head_rel_acc": avg_head_rel_sample_acc,
+        #     "val_tail_rel_acc": avg_tail_rel_sample_acc,
+        #     "val_prec": rel_prf[0],
+        #     "val_recall": rel_prf[1],
+        #     "val_f1": rel_prf[2],
+        #     "time": time.time() - t_ep,
+        # }
+        # logger.log(log_dict)
+        # pprint(log_dict)
+        #
+        # valid_f1 = rel_prf[2]
+        #
 
-                batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                    batch_input_ids.to(device), batch_attention_mask.to(device),
-                    batch_token_type_ids.to(device), batch_ent_shaking_tag.to(device),
-                    batch_head_rel_shaking_tag.to(device),
-                    batch_tail_rel_shaking_tag.to(device))
-
-            elif config["encoder"] in {
-                "BiLSTM",
-            }:
-                sample_list, batch_input_ids, tok2char_span_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
-
-                batch_input_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
-                    batch_input_ids.to(device), batch_ent_shaking_tag.to(device),
-                    batch_head_rel_shaking_tag.to(device),
-                    batch_tail_rel_shaking_tag.to(device))
-
-            with torch.no_grad():
-                if config["encoder"] == "BERT":
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids,
-                        batch_attention_mask,
-                        batch_token_type_ids,
-                    )
-                elif config["encoder"] in {
-                    "BiLSTM",
-                }:
-                    ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs = modelf1(
-                        batch_input_ids)
-
-            ent_sample_acc = metrics.get_sample_accuracy(ent_shaking_outputs,
-                                                         batch_ent_shaking_tag)
-            head_rel_sample_acc = metrics.get_sample_accuracy(
-                head_rel_shaking_outputs, batch_head_rel_shaking_tag)
-            tail_rel_sample_acc = metrics.get_sample_accuracy(
-                tail_rel_shaking_outputs, batch_tail_rel_shaking_tag)
-
-            rel_cpg = metrics.get_rel_cpg(sample_list, tok2char_span_list,
-                                          ent_shaking_outputs,
-                                          head_rel_shaking_outputs,
-                                          tail_rel_shaking_outputs,
-                                          hyper_parameters["match_pattern"])
-
-            ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc, rel_cpg =  ent_sample_acc.item(), head_rel_sample_acc.item(
-            ), tail_rel_sample_acc.item(), rel_cpg
-
-
-            total_ent_sample_acc += ent_sample_acc
-            total_head_rel_sample_acc += head_rel_sample_acc
-            total_tail_rel_sample_acc += tail_rel_sample_acc
-
-            total_rel_correct_num += rel_cpg[0]
-            total_rel_pred_num += rel_cpg[1]
-            total_rel_gold_num += rel_cpg[2]
-
-        avg_ent_sample_acc = total_ent_sample_acc / len(valid_dataloader)
-        avg_head_rel_sample_acc = total_head_rel_sample_acc / len(valid_dataloader)
-        avg_tail_rel_sample_acc = total_tail_rel_sample_acc / len(valid_dataloader)
-
-        rel_prf = metrics.get_prf_scores(total_rel_correct_num,
-                                         total_rel_pred_num,
-                                         total_rel_gold_num)
-
-        log_dict = {
-            "val_ent_seq_acc": avg_ent_sample_acc,
-            "val_head_rel_acc": avg_head_rel_sample_acc,
-            "val_tail_rel_acc": avg_tail_rel_sample_acc,
-            "val_prec": rel_prf[0],
-            "val_recall": rel_prf[1],
-            "val_f1": rel_prf[2],
-            "time": time.time() - t_ep,
-        }
-        logger.log(log_dict)
-        pprint(log_dict)
-
-        valid_f1 = rel_prf[2]
 
 # ----------------------training complete-----------------------
 
