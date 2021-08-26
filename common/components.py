@@ -84,7 +84,7 @@ class LayerNorm(nn.Module):
             outputs = outputs - mean
         if self.scale:
             variance = torch.mean(outputs**2, dim=-1).unsqueeze(-1)
-            std = (variance + self.epsilon) **2
+            std = (variance + self.epsilon) **0.5
             outputs = outputs / std
             outputs = outputs * gamma
         if self.center:
@@ -100,6 +100,7 @@ class HandshakingKernel(nn.Module):
             self.combine_fc = nn.Linear(hidden_size * 2, hidden_size)
         elif shaking_type == "cat_plus":
             self.combine_fc = nn.Linear(hidden_size * 3, hidden_size)
+            self.tp_cln = LayerNorm(hidden_size, hidden_size, conditional = True)
         elif shaking_type == "cln":
             self.tp_cln = LayerNorm(hidden_size, hidden_size, conditional = True)
         elif shaking_type == "cln_plus":
@@ -149,10 +150,12 @@ class HandshakingKernel(nn.Module):
             if self.shaking_type == "cat":
                 shaking_hiddens = torch.cat([repeat_hiddens, visible_hiddens], dim = -1)
                 shaking_hiddens = torch.tanh(self.combine_fc(shaking_hiddens))
+
             elif self.shaking_type == "cat_plus":
                 inner_context = self.enc_inner_hiddens(visible_hiddens, self.inner_enc_type)
                 shaking_hiddens = torch.cat([repeat_hiddens, visible_hiddens, inner_context], dim = -1)
                 shaking_hiddens = torch.tanh(self.combine_fc(shaking_hiddens))
+
             elif self.shaking_type == "cln":
                 shaking_hiddens = self.tp_cln(visible_hiddens, repeat_hiddens)
             elif self.shaking_type == "cln_plus":
