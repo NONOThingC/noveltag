@@ -2,13 +2,13 @@ import string
 import random
 common = {
     "disable_tqdm":True,
-    "exp_name": "webnlg_star",#"nyt","nyt_star",webnlg,webnlg_star
+    "exp_name": "webnlg_star",#"nyt","nyt_star",webnlg,webnlg_star #enhance
     "rel2id": "rel2id.json",
     "device_num": 0,
     # "encoder": "BiLSTM",
     "encoder": "BERT",
     "hyper_parameters": {
-        "shaking_type": "cln_plus",
+        "shaking_type": "cln_plus", # enhance
         # cat, cat_plus, cln, cln_plus; Experiments show that cat/cat_plus work better with BiLSTM, while cln/cln_plus work better with BERT. The results in the paper are produced by "cat". So, if you want to reproduce the results, "cat" is enough, no matter for BERT or BiLSTM.
         "inner_enc_type": "lstm",#not change here
         # valid only if cat_plus or cln_plus is set. It is the way how to encode inner tokens between each token pairs. If you only want to reproduce the results, just leave it alone.
@@ -17,24 +17,25 @@ common = {
         "ent_add_dist": False,
         # set true if you want add distance embeddings for each token pairs. (for entity decoder)
         "rel_add_dist": False,  # the same as above (for relation decoder)
-        "match_pattern": "only_head_text",
+        "match_pattern": "only_head_text", # enhance
         # only_head_text (nyt_star, webnlg_star), whole_text (nyt, webnlg), only_head_index, whole_span
     },
-    "training_method":"increment-training",#"self-training","self-emsembling","increment-training"
-    "use_two_model": False,
+    "training_method":"self-training",#"self-training","self-emsembling","increment-training" # enhance
+    "use_two_model": False,# enhance
     "two_models_hyper_parameters":{
         "student_dropout": 0.1,
         "student_decay": 0,  # 0 equal to not decay
     },
-    "use_strategy":False,
-     "strategy_hyper_parameters":{
-         "Z_RATIO":0.3,
-     },# use this when use_strategy==False
-    #"strategy_hyper_parameters":{
-    #        "enh_rate":2,
-    #        "relh_rate":2,
-    #    },# use this when use_strategy==True
-    "LABEL_OF_TRAIN": 0.3,
+    "use_strategy":True,# enhance
+    # "strategy_hyper_parameters":{
+    #     "Z_RATIO":0.3,
+    # },# use this when use_strategy==False
+    "strategy_hyper_parameters":{
+            "enh_rate":2,
+            "relh_rate":2,
+        },# use this when use_strategy==True
+    "LABEL_OF_TRAIN": 0.15,# enhance
+    "RE_DATA":True,# regenerate train_data
 
 
 }
@@ -65,12 +66,13 @@ train_config = {
     # if not fr scratch, set a model_state_dict
     "model_state_dict_path": "/home/hcw/TPlinker-joint-extraction-master/semitplinker/default_log_dir/U9Hs8dwu/model_state_dict_teacher_best.pt",
     "is_load_2":False,
+    "same_ts":True,
     "student_model_state_dict_path":"",
-    "hyper_parameters": {
-        "batch_size": 16,
-        "TOTAL_EPOCHS": 4,
+    "hyper_parameters": {# enhance
+        "batch_size": 12,
+        "TOTAL_EPOCHS": 2,
         "epochs": 10,
-        "student_epochs": 4,
+        "student_epochs": 8,
         "seed": 2333,
         "log_interval": 10,
         "max_seq_len": 100,
@@ -82,6 +84,7 @@ train_config = {
 }
 
 eval_config = {
+    "only_test":False,
     "model_state_dict_dir": "./default_log_dir",
     # if use wandb, set "./wandb", or set "./default_log_dir" if you use default logger
     "run_ids": ["DGKhEFlH", ],
@@ -159,5 +162,5 @@ eval_config["hyper_parameters"] = hyper_params
 
 
 save_folder=f'dst_{common["exp_name"]}-mtp_{common["hyper_parameters"]["match_pattern"]}-twomodel_{1 if common["use_two_model"] else 0}-trainingway_{common["training_method"]}-label_{common["LABEL_OF_TRAIN"]}-lr_{train_config["hyper_parameters"]["lr"]}-encoder_{common["encoder"]}-strategy_{2 if common["use_strategy"] else 0}-skt_{common["hyper_parameters"]["shaking_type"]}-batch_{train_config["hyper_parameters"]["batch_size"]}-totalep_{train_config["hyper_parameters"]["TOTAL_EPOCHS"]}-teaep_{train_config["hyper_parameters"]["epochs"]}-stuep_{train_config["hyper_parameters"]["student_epochs"]}'
-train_config["log_path"]="./default_log_dir/{}/{}/default.log".format(save_folder,run_id)
+train_config["log_path"]="./default_log_dir/{}/{}/".format(save_folder,run_id)
 train_config["path_to_save_model"]= "./default_log_dir/{}/{}".format(save_folder,run_id)

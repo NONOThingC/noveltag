@@ -8,7 +8,6 @@ import os
 import warnings
 from utils import *
 import functools
-import objgraph
 from tqdm import tqdm
 import re
 from pprint import pprint
@@ -50,38 +49,40 @@ config = config.train_config
 with open("_run_id_tmp", "w") as f:
     f.write(config["path_to_save_model"])
 # Setting
-    sys.setrecursionlimit(10000)
+sys.setrecursionlimit(10000)
 
-    hyper_parameters = config["hyper_parameters"]
-    # Gpu set
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(config["device_num"])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # for reproductivity
-    np.random.seed(hyper_parameters["seed"])
-    torch.manual_seed(hyper_parameters["seed"])  # pytorch random seed
-    torch.backends.cudnn.deterministic = True
+hyper_parameters = config["hyper_parameters"]
+# Gpu set
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
+os.environ["CUDA_VISIBLE_DEVICES"] = str(config["device_num"])
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# for reproductivity
+np.random.seed(hyper_parameters["seed"])
+torch.manual_seed(hyper_parameters["seed"])  # pytorch random seed
+torch.backends.cudnn.deterministic = True
 
-    # params
-    use_two_model=config["use_two_model"]
-    data_home = config["data_home"]
-    experiment_name = config["exp_name"]
-    train_data_path = os.path.join(data_home, experiment_name,
-                                   config["train_data"])
-    valid_data_path = os.path.join(data_home, experiment_name,
-                                   config["valid_data"])
-    rel2id_path = os.path.join(data_home, experiment_name, config["rel2id"])
+# params
+use_two_model=config["use_two_model"]
+data_home = config["data_home"]
+experiment_name = config["exp_name"]
+train_data_path = os.path.join(data_home, experiment_name,
+                               config["train_data"])
+valid_data_path = os.path.join(data_home, experiment_name,
+                               config["valid_data"])
+rel2id_path = os.path.join(data_home, experiment_name, config["rel2id"])
 
-    # For test
-    hyper_parameters_test = test_config["hyper_parameters"]
-    data_home = test_config["data_home"]
-    experiment_name = test_config["exp_name"]
-    test_data_path = os.path.join(data_home, experiment_name, test_config["test_data"])
-    rel2id_path = os.path.join(data_home, experiment_name, test_config["rel2id"])
-    save_res_dir = os.path.join(test_config["save_res_dir"], experiment_name)
-    max_test_seq_len = hyper_parameters_test["max_test_seq_len"]
-    sliding_len = hyper_parameters_test["sliding_len"]
-    force_split = hyper_parameters_test["force_split"]
+# For test
+hyper_parameters_test = test_config["hyper_parameters"]
+data_home = test_config["data_home"]
+experiment_name = test_config["exp_name"]
+test_data_path = os.path.join(data_home, experiment_name, test_config["test_data"])
+rel2id_path = os.path.join(data_home, experiment_name, test_config["rel2id"])
+save_res_dir = os.path.join(test_config["save_res_dir"], experiment_name)
+max_test_seq_len = hyper_parameters_test["max_test_seq_len"]
+sliding_len = hyper_parameters_test["sliding_len"]
+force_split = hyper_parameters_test["force_split"]
+RS_logger=ResultRestore(os.path.join(config["log_path"],"results.log"),0)
+RS_logger.add_file2pool("results.json")
 # save path and logger
 if config["logger"] == "wandb":
     # init wandb
@@ -99,13 +100,13 @@ else:
     model_state_dict_dir = config["path_to_save_model"]
     if not os.path.exists(model_state_dict_dir):
         os.makedirs(model_state_dict_dir)
-    logger = DefaultLogger(config["log_path"], experiment_name,
+    logger = DefaultLogger(os.path.join(config["log_path"],"train_log.txt"), experiment_name,
                            config["run_name"], config["run_id"],
                            config)
 # Global setting end
 # In[ ]:
 
-def first_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,train_dataloader,valid_dataloader):
+def teacher_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,train_dataloader,valid_dataloader):
     for ep in range(FIRST_EPOCHS):
         ## train
         model.train()
@@ -293,19 +294,27 @@ def first_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,trai
         "time": time.time() - t_ep,
     }
     logger.log(log_dict)
-
+    RS_logger.epoch_log("teacher model", str((avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)))
     return (avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)
 
 
 def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
     if STRATEGY == 1:
-        Z_RATIO = 3.074*(sum(seq_val_acc)**0.162)-2.699
-        # if Z_RATIO>0.3:
-        #     Z_RATIO+=random.gauss(0, 0.15)
-        Z_RATIO= max(0.1,Z_RATIO)
+        # Z_RATIO = 3.074*(sum(seq_val_acc)**0.162)-2.699
+        # Z_RATIO=2.274 * (sum(seq_val_acc)** 0.162) - 2.159
+        Z_RATIO = 2.574 * (sum(seq_val_acc) ** 0.162) - 2.349
+        # if sum(seq_val_acc)>1.2:
+        #     Z_RATIO-=0.2
+        if sum(seq_val_acc)>2.1:
+             Z_RATIO+=random.gauss(0, 0.15)
+        Z_RATIO= max(0.15,Z_RATIO)
     else:
         Z_RATIO= config["strategy_hyper_parameters"]["Z_RATIO"]
-    print(f"generate pseudo label,Z_RATIO: {Z_RATIO}, NUMBER: {int(Z_RATIO*BATCH_SIZE)} \n")
+    # print(f"generate pseudo label,Z_RATIO: {Z_RATIO}, NUMBER: {int(Z_RATIO*BATCH_SIZE)} \n")
+
+    logger.log("generate pseudo label,Z_RATIO: {}, NUMBER: {} \n".format(Z_RATIO,int(Z_RATIO*len(unlabeled_dataloader_all))))
+    RS_logger.epoch_log("Z_ratio", str(Z_RATIO))
+    RS_logger.add_json("Z_ratio", Z_RATIO)
     ## valid
     modelf1.eval()
     t_ep = time.time()
@@ -315,7 +324,6 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
 
     results = []
     for batch_ind, batch_valid_data in enumerate(tqdm(unlabeled_dataloader_all, desc="Validating",disable=config["disable_tqdm"])):
-
         if config["encoder"] == "BERT":
             sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,matrix_spots_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
             batch_input_ids, batch_attention_mask, batch_token_type_ids, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = (
@@ -358,30 +366,59 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
             # fine_indexs= []
             model_output=[ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs]
             if STRATEGY == 1:
-                if sum(seq_val_acc)<1:
-                    enh_rate = config["strategy_hyper_parameters"]["enh_rate"]*  seq_val_acc[0]   # 系数提升几倍
-                    enh_rate = max(1,enh_rate)
-                    relh_rate = config["strategy_hyper_parameters"]["relh_rate"] * (seq_val_acc[1]+seq_val_acc[2])# From valid step
-                    relh_rate=max(1,relh_rate)
-                else:
-                    enh_rate = config["strategy_hyper_parameters"]["enh_rate"] * seq_val_acc[0]/2  # 系数提升几倍
-                    enh_rate = max(1, enh_rate)
-                    relh_rate = config["strategy_hyper_parameters"]["relh_rate"] * (
-                                seq_val_acc[1] + seq_val_acc[2])  # From valid step
-                    relh_rate = max(1, relh_rate)
+                # if sum(seq_val_acc)<1:
+                #     enh_rate = config["strategy_hyper_parameters"]["enh_rate"]*  (1-seq_val_acc[0])   # 系数提升几倍
+                #     enh_rate = max(1,enh_rate)
+                #     relh_rate = config["strategy_hyper_parameters"]["relh_rate"] * (seq_val_acc[1]+seq_val_acc[2])# From valid step
+                #     relh_rate=max(1,relh_rate)
+                # # else:
+                #     enh_rate = config["strategy_hyper_parameters"]["enh_rate"] * seq_val_acc[0]/2  # 系数提升几倍
+                #     enh_rate = max(1, enh_rate)
+                #     relh_rate = config["strategy_hyper_parameters"]["relh_rate"] * (
+                #                 seq_val_acc[1] + seq_val_acc[2])  # From valid step
+                #     relh_rate = max(1, relh_rate)
+
+                enh_rate =  1-seq_val_acc[0]   # 系数提升几倍
+                enh_rate = max(0.3,enh_rate)
+                relh_rate1 =  seq_val_acc[1]
+                relh_rate2 =seq_val_acc[2]# From valid step
+                relh_rate1=max(0.3,relh_rate1)
+                relh_rate2 = max(0.3, relh_rate2)
             else:
                 enh_rate=1
-                relh_rate=1
-            #
-            for shaking_outputs in model_output:
-                pred_weight, label = torch.max(shaking_outputs, dim=-1)
-                if len(pred_weight.shape)==2:# entity seq
-                    pred_weight = pred_weight*enh_rate
-                    sequence_weight = torch.mean(pred_weight, dim=-1)
-                else:#rel seq
-                    sequence_weight = torch.mean(pred_weight, dim=-1)
-                 # entity\head\rel的分数综合考虑
-                    sequence_weight = torch.mean(sequence_weight, dim=-1)*relh_rate
+                relh_rate1=1
+                relh_rate2 = 1
+            # TODO:设计一个神经网络的评分函数
+            # 评分函数1
+            if STRATEGY==0:
+                for shaking_outputs in model_output:#16,2020,2  16,2020 , 0:22,1:5  0:5,1:23
+                    pred_weight, label = torch.max(shaking_outputs, dim=-1)
+                    if len(pred_weight.shape)==2:# entity seq
+                        pred_weight = pred_weight*enh_rate
+                        sequence_weight = torch.mean(pred_weight, dim=-1)
+                    else:#rel seq# 16,171,2020,3
+                        sequence_weight = torch.mean(pred_weight, dim=1)#
+                     # entity\head\rel的分数综合考虑
+                        sequence_weight = torch.mean(sequence_weight, dim=-1)*(relh_rate1+relh_rate2)/2
+                    sequence_weights.append(sequence_weight)
+            else:
+                #评分函数2
+                # entity
+                ent_shaking_outputs, head_rel_shaking_outputs, tail_rel_shaking_outputs
+                pred_weight, label = torch.max(ent_shaking_outputs, dim=-1)
+                sequence_weight = torch.mean(pred_weight, dim=-1) * enh_rate
+                sequence_weights.append(sequence_weight)
+                # head rel
+                pred_weight, label = torch.max(head_rel_shaking_outputs, dim=-1)#
+                pred_weight = torch.mean(pred_weight, dim=-1)
+                pred_weight,_ = torch.topk(pred_weight, 5, dim=1, largest=True, sorted=False, out=None)
+                sequence_weight = torch.mean(pred_weight, dim=-1) * relh_rate1
+                sequence_weights.append(sequence_weight)
+                # tail rel
+                pred_weight, label = torch.max(tail_rel_shaking_outputs, dim=-1)#
+                pred_weight = torch.mean(pred_weight, dim=-1)
+                pred_weight,_ = torch.topk(pred_weight, 5, dim=1, largest=True, sorted=False, out=None)
+                sequence_weight = torch.mean(pred_weight, dim=-1) * relh_rate2
                 sequence_weights.append(sequence_weight)
             # else:
             #     for shaking_outputs in model_output:
@@ -419,7 +456,7 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
                 # sorted_spots_list.append(matrix_spots_list[i])
             for i in range(3):
                 results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]).item())
-            print("Pseudo label acc is:{}".format(np.mean(results)))
+            # print("Pseudo label acc is:{}".format(np.mean(results)))
             # else:#student strategy
             #     sort_input = []
             #     for var in batch_valid_data:
@@ -451,6 +488,8 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
         "time": time.time() - t_ep,
     }
     logger.log(log_dict)
+    RS_logger.epoch_log("pseudo acc", str(np.mean(results)))
+    RS_logger.add_json("pseudo acc", np.mean(results))
             # if total_epoch != TOTAL_EPOCHS-1:
             #     batch_new_data=batch2dataset(*(sort_input[:-2]+pseudo_labels))#-2 because placeholder,not -3
             #     batch_new_data_list.extend(batch_new_data)
@@ -675,12 +714,8 @@ def student_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,tr
         "time": time.time() - t_ep,
     }
     logger.log(log_dict)
-    pprint(log_dict)
-
+    RS_logger.epoch_log("student model", str((avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)))
     return (avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)
-
-
-
 
 
 def test_step(teacher_model,student_model,save_res_dir,max_test_seq_len):
@@ -793,6 +828,7 @@ def test_step(teacher_model,student_model,save_res_dir,max_test_seq_len):
                     file_out.write("{}\n".format(json_line))
 
     # score
+    f=open(save_dir4run+"test_results.json","w+")
     if test_config["score"]:
         score_dict = {}
         correct = hyper_parameters_test["match_pattern"]
@@ -814,8 +850,13 @@ def test_step(teacher_model,student_model,save_res_dir,max_test_seq_len):
                 "val_f1": prf[2],
             }
             logger.log(log_dict)
+
+            json.dump(log_dict, f)
         print("---------------- Results -----------------------")
         pprint(score_dict)
+        RS_logger.epoch_log("test results",str(score_dict))
+        RS_logger["Results"]=str(score_dict)
+    f.close()
 
 
 
@@ -832,15 +873,24 @@ def self_training():
     # fine_map = collections.defaultdict(tuple)  # key:train id ; value:correct number
     max_student_val=-1
     max_val=-1
+    seq_val_acc_student=[-2]
     last_val_acc=0
     last_val_acc_stu=0
+    optional=False
+    first_copy=True
+
     for total_epoch in range(TOTAL_EPOCHS):
         # Add an inner loop to judge the entire unlabeled data set finished
+
         print(f"Total epoch{total_epoch}:\n")
         # FIRST_EPOCHS=min(8,hyper_parameters["epochs"]-2+ 2*total_epoch)
-        seq_val_acc=first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
+        seq_val_acc=teacher_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
         # -------train f1 end---------
         # -------generate pseudo label---------
+        RS_logger.log("teacher pseudo:")
+        RS_logger["Epoch"]=total_epoch
+        RS_logger["teacher val"]=seq_val_acc
+        RS_logger.set_text("teacher")
         batch_new_data_list=generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=config["use_strategy"])
         last_val_acc=seq_val_acc
         # -------generate pseudo label end---------
@@ -855,13 +905,9 @@ def self_training():
                 drop_last=False,
                 collate_fn=functools.partial(data_maker.generate_batch, data_type="student"),
             )
-            SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
-            # -------student model train---------
-            print("student training start:")
-            seq_val_acc_student = student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2, scheduler2,
-                                                           student_train_dataloader, valid_dataloader, seq_val_acc)
+            # SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
+            SECOND_EPOCHS = int(hyper_parameters["student_epochs"])
 
-            # -------student model end---------
             if sum(seq_val_acc)<1.2 or sum(seq_val_acc_student)<1.2:
                 print("Use teacher information.")
                 train_dataloader = DataLoader(
@@ -873,9 +919,22 @@ def self_training():
                     collate_fn=data_maker.generate_batch,
                 )
             else:
+                if first_copy:
+                    modelf2=copy.deepcopy(modelf1)
+                    first_copy=False
                 print("Use student information.")
+                # -------student model train---------
+                print("student training start:")
+                RS_logger.set_text("student")
+                seq_val_acc_student = student_training_process(modelf2, SECOND_EPOCHS, optimizer2, loss_func2,
+                                                               scheduler2,
+                                                               student_train_dataloader, valid_dataloader, seq_val_acc)
+
+                RS_logger["student val"] = seq_val_acc_student
+                # -------student model end---------
                 # -------student generate pseudo label---------
                 print("student generate pseudo")
+                RS_logger.log("student pseudo:")
                 batch_new_data_list = generate_pseudo(modelf2, seq_val_acc_student, unlabeled_dataloader_all, STRATEGY=config["use_strategy"])
                 # -------generate next data---------
                 train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
@@ -887,15 +946,33 @@ def self_training():
                     drop_last=False,
                     collate_fn=data_maker.generate_batch,
                 )
-            last_val_acc_stu = seq_val_acc_student
+                if SECOND_EPOCHS != 0:
+                    max_student_val = save_model(current=sum(seq_val_acc_student), last=max_student_val,
+                                                 save_path=os.path.join(
+                                                     model_state_dict_dir,
+                                                     "model_state_dict_student_best.pt"), current_model=modelf2)
             # save model
             max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
                 model_state_dict_dir,
                 "model_state_dict_best.pt"), current_model=modelf1)
-            if SECOND_EPOCHS!=0:
-                max_student_val = save_model(current=sum(seq_val_acc_student), last=max_student_val, save_path=os.path.join(
-                    model_state_dict_dir,
-                    "model_state_dict_student_best.pt"), current_model=modelf2)
+
+
+            if optional:
+                modelf1.load_state_dict(torch.load(os.path.join(
+                model_state_dict_dir,
+                "model_state_dict_student_best.pt")), strict=False)
+                modelf2=TPLinkerBert(
+            encoder,
+            len(rel2id),
+            hyper_parameters["shaking_type"],
+            hyper_parameters["inner_enc_type"],
+            hyper_parameters["dist_emb_size"],
+            hyper_parameters["ent_add_dist"],
+            hyper_parameters["rel_add_dist"],
+            dropout=config["two_models_hyper_parameters"]["student_dropout"],
+            is_dropout=True
+        ).to(device)
+
         else:
             train_dataloader = DataLoader(
                 train_add_dataset,  # The training samples.
@@ -910,6 +987,7 @@ def self_training():
                 model_state_dict_dir,
                 "model_state_dict_best.pt"), current_model=modelf1)
         batch_new_data_list = []
+
         # # 清理尾部数据
         # if len(batch_new_data_list) > 0:  # 1000大概2~3GB
         #     # 文件流操作
@@ -950,8 +1028,8 @@ def self_training():
 
         # test
         if config["fr_scratch"]:
-            if total_epoch == TOTAL_EPOCHS - 1 or total_epoch == TOTAL_EPOCHS - 2:
-                if use_two_model and SECOND_EPOCHS!=0:
+            if total_epoch >0:
+                if use_two_model and first_copy==False:
                     test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
                 else:
                     test_step(modelf1, None, save_res_dir, max_test_seq_len)
@@ -962,6 +1040,8 @@ def self_training():
                     test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
                 else:
                     test_step(modelf1, None, save_res_dir, max_test_seq_len)
+        RS_logger.get_file("results.json").write(json.dumps(RS_logger.get_json()))
+        RS_logger.add_epoch()
 
     modelf1.load_state_dict(torch.load(os.path.join(
         model_state_dict_dir,
@@ -997,7 +1077,8 @@ def increment_training():
         print(f"Total epoch{total_epoch}:\n")
         for meta_epoch in range(META_EPOCHS):
             print(f"Mate epoch{meta_epoch}:\n")
-            seq_val_acc=first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
+            seq_val_acc=teacher_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,train_dataloader,valid_dataloader)
+            RS_logger.log("teacher pseudo:")
             batch_new_data_list = generate_pseudo(modelf1, seq_val_acc, unlabeled_dataloader_all[meta_epoch],
                                                   STRATEGY=config["use_strategy"])
             train_add_dataset = labeled_dataloader.dataset + MyDataset(batch_new_data_list)
@@ -1009,9 +1090,10 @@ def increment_training():
                 drop_last=False,
                 collate_fn=data_maker.generate_batch,
             )
-            seq_val_acc = first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,
+            seq_val_acc = teacher_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,
                                                  train_dataloader, valid_dataloader)
 
+            RS_logger.add_epoch()
         max_val = save_model(current=sum(seq_val_acc), last=max_val, save_path=os.path.join(
             model_state_dict_dir,
             "model_state_dict_best.pt"), current_model=modelf1)
@@ -1067,10 +1149,11 @@ def mean_teacher():
                                  scheduler2,
                                  student_train_dataloader, valid_dataloader, seq_val_acc)
 
-        seq_val_acc = first_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,
+        seq_val_acc = teacher_training_process(modelf1, FIRST_EPOCHS, optimizer1, loss_func1, scheduler1,
                                              train_dataloader, valid_dataloader)
         # -------train f1 end---------
         # -------generate pseudo label---------
+        RS_logger.log("teacher pseudo:")
         batch_new_data_list = generate_pseudo(modelf1, seq_val_acc, unlabeled_dataloader_all,
                                               STRATEGY=config["use_strategy"])
         last_val_acc = seq_val_acc
@@ -1105,7 +1188,8 @@ def mean_teacher():
 
                 # -------student model end---------
             else:
-                SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
+                # SECOND_EPOCHS = int(hyper_parameters["student_epochs"] * sum(seq_val_acc))
+                SECOND_EPOCHS = int(hyper_parameters["student_epochs"])
                 print("Use student information.")
                 # -------student model train---------
                 print("student training start:")
@@ -1115,7 +1199,8 @@ def mean_teacher():
                 # -------student model end---------
                 # -------student generate pseudo label---------
                 print("student generate pseudo")
-                batch_new_data_list = generate_pseudo(modelf2, seq_val_acc_student, unlabeled_dataloader_all,
+                RS_logger.log("student pseudo:")
+                batch_new_data_list = generate_pseudo(RS_logger,modelf2, seq_val_acc_student, unlabeled_dataloader_all,
                                                       STRATEGY=config["use_strategy"])
 
                 # -------generate next data---------
@@ -1382,13 +1467,21 @@ class MyDataset(Dataset):
 
 if __name__ == '__main__':
 
-
-
-    # # Load Data
+    # Load Data
+    LABEL_OF_TRAIN = config["LABEL_OF_TRAIN"]  # Label ratio
     train_data = json.load(open(train_data_path, "r", encoding="utf-8"))
     valid_data = json.load(open(valid_data_path, "r", encoding="utf-8"))
-
-
+    train_data_path = os.path.join(data_home, experiment_name,
+                                   config["train_data"])
+    if os.path.exists(os.path.join(data_home, experiment_name,"label.pkl")) and os.path.exists(os.path.join(data_home, experiment_name,"unlabel.pkl")) and not config["RE_DATA"]:
+        with open(os.path.join(data_home, experiment_name,"label.pkl"),"rb") as f1,open(os.path.join(data_home, experiment_name,"unlabel.pkl"),"rb") as f2:
+            train_data, unlabeled_train_data=pickle.load(f1),pickle.load(f2)
+    else:
+        train_data, unlabeled_train_data = stratified_sample(train_data,LABEL_OF_TRAIN)
+        with open(os.path.join(data_home, experiment_name, "label.pkl"), "wb") as f1, open(
+                os.path.join(data_home, experiment_name, "unlabel.pkl"), "wb") as f2:
+            pickle.dump(train_data,f1)
+            pickle.dump(unlabeled_train_data,f2)
     # # Extract part data
     # with open(train_data_path+'-sample',"w",encoding="utf-8") as f:
     #     f.write(json.dumps(train_data[:1000]))
@@ -1417,7 +1510,6 @@ if __name__ == '__main__':
                 char_num += len(tok) + 1  # +1: whitespace
             return tok2char_span
 
-
     # preprocess
     preprocessor = Preprocessor(tokenize_func=tokenize,
                                 get_tok2char_span_map_func=get_tok2char_span_map)
@@ -1425,7 +1517,7 @@ if __name__ == '__main__':
     # In[ ]:
     # train and valid max token num
     max_tok_num = 0
-    all_data = train_data + valid_data
+    all_data = train_data + valid_data + unlabeled_train_data
 
     for sample in all_data:
         tokens = tokenize(sample["text"])
@@ -1691,11 +1783,15 @@ if __name__ == '__main__':
     #load existing model
     if not config["fr_scratch"]:
         model_state_path = config["model_state_dict_path"]
-        modelf1.load_state_dict(torch.load(model_state_path))
+        modelf1.load_state_dict(torch.load(model_state_path),strict=False)
+        if config["same_ts"]:
+            modelf2.load_state_dict(torch.load(model_state_path), strict=False)
         if config["is_load_2"]:
-            modelf2.load_state_dict(torch.load(config["student_model_state_dict_path"]))
+            modelf2.load_state_dict(torch.load(config["student_model_state_dict_path"]),strict=False)
         print("------------model state {} loaded ----------------".format(
             model_state_path.split("/")[-1]))
+
+
 
     # parameters
     # 测试参数
@@ -1706,22 +1802,30 @@ if __name__ == '__main__':
     # META_EPOCHS = 2
     # 正常参数
     BATCH_SIZE=hyper_parameters["batch_size"]
-    LABEL_OF_TRAIN = config["LABEL_OF_TRAIN"]  # Label ratio
     FIRST_EPOCHS= hyper_parameters["epochs"]
     SECOND_EPOCHS= hyper_parameters["student_epochs"]
     TOTAL_EPOCHS = hyper_parameters["TOTAL_EPOCHS"]
-    # stratified data
-    labeled_dataset, unlabeled_dataset_total = stratified_sample(MyDataset(indexed_train_data),LABEL_OF_TRAIN)
+    # train_data_path = os.path.join(data_home, experiment_name,
+    #                                config["train_data"])
+    # if os.path.exists(os.path.join(data_home, experiment_name,"label.pkl")) and os.path.exists(os.path.join(data_home, experiment_name,"unlabel.pkl")):
+    #     with open(os.path.join(data_home, experiment_name,"label.pkl"),"rb") as f1,open(os.path.join(data_home, experiment_name,"unlabel.pkl"),"rb") as f2:
+    #         labeled_dataset, unlabeled_dataset_total=pickle.load(f1),pickle.load(f2)
+    # else:
+    #     labeled_dataset, unlabeled_dataset_total = stratified_dataset(MyDataset(indexed_train_data),LABEL_OF_TRAIN)
+    #     with open(os.path.join(data_home, experiment_name, "label.pkl"), "wb") as f1, open(
+    #             os.path.join(data_home, experiment_name, "unlabel.pkl"), "wb") as f2:
+    #         pickle.dump(labeled_dataset,f1)
+    #         pickle.dump(unlabeled_dataset_total,f2)
 
     # # build train dataloader
     # for i in range(META_EPOCHS):
-    #     unlabeled_dataset_now, unlabeled_dataset_total = stratified_sample(unlabeled_dataset_total,
+    #     unlabeled_dataset_now, unlabeled_dataset_total = stratified_dataset(unlabeled_dataset_total,
     #                                                                        UNLABEL_OF_TRAIN / META_EPOCHS)
     #     unlabeled_dataset.append(unlabeled_dataset_now)
 
     # Create the DataLoaders for our label and unlabel sets.
     labeled_dataloader = DataLoader(
-        labeled_dataset,
+        MyDataset(train_data),
         batch_size=hyper_parameters["batch_size"],
         shuffle=True,
         num_workers=0,
@@ -1730,7 +1834,7 @@ if __name__ == '__main__':
     )
     if config["training_method"]=="self-training":
         unlabeled_dataloader_all = DataLoader(
-            unlabeled_dataset_total, # The training samples.
+            MyDataset(unlabeled_train_data), # The training samples.
             batch_size=hyper_parameters["batch_size"],
             shuffle=False,
             num_workers=0,
@@ -1739,7 +1843,7 @@ if __name__ == '__main__':
         )
     elif config["training_method"]=="increment-training":
         META_EPOCHS=4
-        unlabeled_dataset=random_split(unlabeled_dataset_total,split_sample(unlabeled_dataset_total,n_part=META_EPOCHS))
+        unlabeled_dataset=random_split(MyDataset(unlabeled_train_data),split_sample(MyDataset(unlabeled_train_data),n_part=META_EPOCHS))
         unlabeled_dataloader_all = []
         for i in range(META_EPOCHS):
             unlabeled_dataloader_now = DataLoader(
@@ -1752,20 +1856,12 @@ if __name__ == '__main__':
             )
             unlabeled_dataloader_all.append(unlabeled_dataloader_now)
 
-    indexed_valid_data = data_maker.get_indexed_data(valid_data, max_seq_len)
-
-    # build valid dataloader
-    valid_dataloader = DataLoader(
-        MyDataset(indexed_valid_data),
-        batch_size=hyper_parameters["batch_size"],
-        shuffle=True,
-        num_workers=0,
-        drop_last=False,
-        collate_fn=data_maker.generate_batch,
-    )
-
-
-    if config["training_method"]=="self-training":
+    if test_config["only_test"]:
+        if use_two_model:
+            test_step(modelf1, modelf2, save_res_dir, max_test_seq_len)
+        else:
+            test_step(modelf1, None, save_res_dir, max_test_seq_len)
+    elif config["training_method"]=="self-training":
         self_training()
     elif config["training_method"]=="increment-training":
         increment_training()

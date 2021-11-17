@@ -438,7 +438,7 @@ class DataMaker4Bert():
         if data_type == "pseudo_training":
             return sample_list, \
                    batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, matrix_spots_list, \
-                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag
+                   batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag#此时生成的最后三个是真实的标签，倒数第四个是真实矩阵
         elif data_type == "student":
             return sample_list, \
                    batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list, pseudo_flag, \
@@ -496,7 +496,7 @@ class DataMaker4BiLSTM():
                 sign_for_not_pesudo = True  # 此时按照原本数据方式生成上述三个
                 pseudo_flag.append(0)
             else:
-                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp6
+                sign_for_not_pesudo = False  # 此时上述上三个东西来源tp4
                 pseudo_flag.append(1)
             if data_type != "test":
                 if sign_for_not_pesudo:  # not use pesudo

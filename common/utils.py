@@ -19,7 +19,9 @@ class DefaultLogger:
     def log(self, text):
         text = "run_id: {}, {}".format(self.run_id, text)
         print(text)
-        open(self.log_path, "a", encoding = "utf-8").write("{}\n".format(text))
+        with open(self.log_path, "a", encoding="utf-8") as f:
+            f.write("{}\n".format(text))
+
         
 class Preprocessor:
     '''

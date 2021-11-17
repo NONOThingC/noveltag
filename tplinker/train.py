@@ -144,9 +144,7 @@ if max_tok_num > hyper_parameters["max_seq_len"]:
         sliding_len=hyper_parameters["sliding_len"],
         encoder=config["encoder"])
 
-# In[ ]:
 
-print("train: {}".format(len(train_data)), "valid: {}".format(len(valid_data)))
 
 # # Tagger (Decoder)
 
@@ -208,9 +206,13 @@ class MyDataset(Dataset):
 
 # In[ ]:
 # 得到要输入的数据格式形式
+z_ratio=0.2
+train_data=train_data[:int(len(train_data)*z_ratio)]
 indexed_train_data = data_maker.get_indexed_data(train_data, max_seq_len)
 indexed_valid_data = data_maker.get_indexed_data(valid_data, max_seq_len)
+# In[ ]:
 
+print("train: {}".format(len(train_data)), "valid: {}".format(len(valid_data)))
 # In[ ]:
 
 train_dataloader = DataLoader(

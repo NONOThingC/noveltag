@@ -2,7 +2,7 @@ import string
 import random
 
 common = {
-    "exp_name": "duie2", # ace05_lu
+    "exp_name": "nytstar", # ace05_lu
     "rel2id": "rel2id.json",
     "ent2id": "ent2id.json",
     "device_num": 1,
@@ -12,7 +12,7 @@ common = {
         "shaking_type": "cln_plus",
         "inner_enc_type": "lstm",
         # match_pattern: only_head_text (nyt_star, webnlg_star), whole_text (nyt, webnlg), only_head_index, whole_span, event_extraction
-        "match_pattern": "whole_text", 
+        "match_pattern": "only_head_text",
     },
 }
 common["run_name"] = "{}+{}+{}".format("TP2", common["hyper_parameters"]["shaking_type"], common["encoder"]) + ""

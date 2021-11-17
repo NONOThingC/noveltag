@@ -2,7 +2,8 @@ import string
 import random
 
 common = {
-    "exp_name": "nyt",
+    "disable_tqdm":True,
+    "exp_name": "nyt_star",
     "rel2id": "rel2id.json",
     "device_num": 0,
 #     "encoder": "BiLSTM",
@@ -23,13 +24,13 @@ train_config = {
     "train_data": "train_data.json",
     "valid_data": "valid_data.json",
     "rel2id": "rel2id.json",
-    "logger": "wandb", # if wandb, comment the following four lines
+    # "logger": "wandb", # if wandb, comment the following four lines
     
-#     # if logger is set as default, uncomment the following four lines
-#     "logger": "default", 
-#     "run_id": run_id,
-#     "log_path": "./default_log_dir/default.log",
-#     "path_to_save_model": "./default_log_dir/{}".format(run_id),
+    # if logger is set as default, uncomment the following four lines
+    "logger": "default",
+    "run_id": run_id,
+    "log_path": "./default_log_dir/default.log",
+    "path_to_save_model": "./default_log_dir/{}".format(run_id),
 
     # only save the model state dict if F1 score surpasses <f1_2_save>
     "f1_2_save": 0, 
@@ -52,6 +53,7 @@ train_config = {
 }
 
 eval_config = {
+    "only_test":False,
     "model_state_dict_dir": "./default_log_dir", # if use wandb, set "./wandb", or set "./default_log_dir" if you use default logger
     "run_ids": ["DGKhEFlH", ],
     "last_k_model": 1,
