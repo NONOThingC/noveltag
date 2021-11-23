@@ -297,6 +297,41 @@ def teacher_training_process(model,FIRST_EPOCHS,optimizer,loss_func,scheduler,tr
     RS_logger.epoch_log("teacher model", str((avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)))
     return (avg_ent_sample_acc, avg_head_rel_sample_acc, avg_tail_rel_sample_acc)
 
+# def bs_right(nums,target):
+#     # nums descending order
+#     left = 0
+#     right = len(nums)
+#     while (left < right):
+#         mid = left + (right - left) // 2
+#         if nums[mid] > target:
+#             left = mid + 1
+#         elif nums[mid] < target:
+#             right = mid
+#         else:
+#             left = mid + 1
+#     return left
+
+def put_data_into_topK(topK_list,data):
+    """
+    topKlist格式[分数] 降序
+    data数据格式（分数，index）
+    把一个list的分数放入，替换topK-list中内容，并给出对应的index
+    """
+#     data=sorted(data,key=lambda x:x[0],reverse=True)
+#     for i in range(len(data)):
+#         ind=bs_right(topK_list,data[i])
+#         if ind==len(topK_list):
+#             break
+#         else:
+#             #插入到正确ind位置
+#             topK_list.insert(ind)
+    topK_list+data
+
+
+
+
+
+
 
 def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
     if STRATEGY == 1:
@@ -319,10 +354,12 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
     modelf1.eval()
     t_ep = time.time()
     pseudo_count = 0
+    topK_list=[]
     batch_new_data_list=[]
     # 注意，这里更新了train_loader
 
     results = []
+    topK=[]
     for batch_ind, batch_valid_data in enumerate(tqdm(unlabeled_dataloader_all, desc="Validating",disable=config["disable_tqdm"])):
         if config["encoder"] == "BERT":
             sample_list, batch_input_ids, batch_attention_mask, batch_token_type_ids, tok2char_span_list,matrix_spots_list, batch_ent_shaking_tag, batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_valid_data
@@ -446,7 +483,7 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
                 else:
                     raise Exception
             model_output=[var[inter_index].to("cpu") for var in model_output]
-            gold_labels = sort_input[-3:]
+            true_labels = sort_input[-3:]
             pseudo_labels = [label[inter_index] for label in labels]
             pseudo_count += len(inter_index)
             #此操作耗时，得到序号inter_index再解析
@@ -455,7 +492,7 @@ def generate_pseudo(modelf1,seq_val_acc,unlabeled_dataloader_all,STRATEGY=1):
                 sorted_spots_list.append((handshaking_tagger.get_sharing_spots_fr_shaking_tag(batch_pred_ent_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_head_rel_shaking_tag[i]),handshaking_tagger.get_spots_fr_shaking_tag(batch_pred_tail_rel_shaking_tag[i])))
                 # sorted_spots_list.append(matrix_spots_list[i])
             for i in range(3):
-                results.append(metrics.get_sample_accuracy(model_output[i], gold_labels[i]).item())
+                results.append(metrics.get_sample_accuracy(model_output[i], true_labels[i]).item())
             # print("Pseudo label acc is:{}".format(np.mean(results)))
             # else:#student strategy
             #     sort_input = []
@@ -1024,7 +1061,7 @@ def self_training():
         #         collate_fn=data_maker.generate_batch,
         #     )
         # exct_indexs_list=[]
-        torch.cuda.empty_cache()
+
 
         # test
         if config["fr_scratch"]:
@@ -1042,6 +1079,7 @@ def self_training():
                     test_step(modelf1, None, save_res_dir, max_test_seq_len)
         RS_logger.get_file("results.json").write(json.dumps(RS_logger.get_json()))
         RS_logger.add_epoch()
+        torch.cuda.empty_cache()
 
     modelf1.load_state_dict(torch.load(os.path.join(
         model_state_dict_dir,
@@ -1532,6 +1570,11 @@ if __name__ == '__main__':
             hyper_parameters["max_seq_len"],
             sliding_len=hyper_parameters["sliding_len"],
             encoder=config["encoder"])
+        unlabeled_train_data = preprocessor.split_into_short_samples(
+            unlabeled_train_data,
+            hyper_parameters["max_seq_len"],
+            sliding_len=hyper_parameters["sliding_len"],
+            encoder=config["encoder"])
         valid_data = preprocessor.split_into_short_samples(
             valid_data,
             hyper_parameters["max_seq_len"],
@@ -1540,7 +1583,7 @@ if __name__ == '__main__':
 
     # In[ ]:
 
-    print("train: {}".format(len(train_data)), "valid: {}".format(len(valid_data)))
+    print("train: {}".format(len(train_data)),"unlabeled train: {}".format(len(unlabeled_train_data)), "valid: {}".format(len(valid_data)))
 
     # # Tagger (Decoder)
 
@@ -1590,6 +1633,7 @@ if __name__ == '__main__':
     # In[ ]:
     # 得到要输入的数据格式形式
     indexed_train_data = data_maker.get_indexed_data(train_data, max_seq_len)
+    indexed_unlabeled_train_data = data_maker.get_indexed_data(unlabeled_train_data, max_seq_len)
     indexed_valid_data = data_maker.get_indexed_data(valid_data, max_seq_len)
 
     # In[ ]:
@@ -1825,7 +1869,7 @@ if __name__ == '__main__':
 
     # Create the DataLoaders for our label and unlabel sets.
     labeled_dataloader = DataLoader(
-        MyDataset(train_data),
+        MyDataset(indexed_train_data),
         batch_size=hyper_parameters["batch_size"],
         shuffle=True,
         num_workers=0,
@@ -1834,7 +1878,7 @@ if __name__ == '__main__':
     )
     if config["training_method"]=="self-training":
         unlabeled_dataloader_all = DataLoader(
-            MyDataset(unlabeled_train_data), # The training samples.
+            MyDataset(indexed_unlabeled_train_data), # The training samples.
             batch_size=hyper_parameters["batch_size"],
             shuffle=False,
             num_workers=0,
@@ -1843,7 +1887,7 @@ if __name__ == '__main__':
         )
     elif config["training_method"]=="increment-training":
         META_EPOCHS=4
-        unlabeled_dataset=random_split(MyDataset(unlabeled_train_data),split_sample(MyDataset(unlabeled_train_data),n_part=META_EPOCHS))
+        unlabeled_dataset=random_split(MyDataset(indexed_unlabeled_train_data),split_sample(MyDataset(indexed_unlabeled_train_data),n_part=META_EPOCHS))
         unlabeled_dataloader_all = []
         for i in range(META_EPOCHS):
             unlabeled_dataloader_now = DataLoader(

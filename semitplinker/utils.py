@@ -180,7 +180,7 @@ class ResultRestore:
 
     def __del__(self):
         self.log_file.close()
-        for i in self._file_pool:
+        for i in self._file_pool.values():
             i.close()
 
     def epoch_log(self, title,text):

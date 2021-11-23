@@ -1,14 +1,16 @@
 import string
 import random
+# 注意，注释表示只能从这几个里面选择填什么
+###！！！！！！！！！！！！！！注意，填True False，千万别写成true false或者“True” “False”
 common = {
     "disable_tqdm":True,
-    "exp_name": "webnlg_star",#"nyt","nyt_star",webnlg,webnlg_star #enhance
+    "exp_name": "webnlg_star",#"nyt","nyt_star",webnlg,webnlg_star #enhance #这个是数据集的名字，用nytstar或者webnlgstar
     "rel2id": "rel2id.json",
-    "device_num": 0,
+    "device_num": 0,#控制用哪几张GPU
     # "encoder": "BiLSTM",
     "encoder": "BERT",
     "hyper_parameters": {
-        "shaking_type": "cln_plus", # enhance
+        "shaking_type": "cln_plus", # nytstar用cat，webnlgstar用clnplus
         # cat, cat_plus, cln, cln_plus; Experiments show that cat/cat_plus work better with BiLSTM, while cln/cln_plus work better with BERT. The results in the paper are produced by "cat". So, if you want to reproduce the results, "cat" is enough, no matter for BERT or BiLSTM.
         "inner_enc_type": "lstm",#not change here
         # valid only if cat_plus or cln_plus is set. It is the way how to encode inner tokens between each token pairs. If you only want to reproduce the results, just leave it alone.
@@ -17,16 +19,16 @@ common = {
         "ent_add_dist": False,
         # set true if you want add distance embeddings for each token pairs. (for entity decoder)
         "rel_add_dist": False,  # the same as above (for relation decoder)
-        "match_pattern": "only_head_text", # enhance
+        "match_pattern": "only_head_text", # enhance #默认填only_head_text
         # only_head_text (nyt_star, webnlg_star), whole_text (nyt, webnlg), only_head_index, whole_span
     },
-    "training_method":"self-training",#"self-training","self-emsembling","increment-training" # enhance
-    "use_two_model": False,# enhance
-    "two_models_hyper_parameters":{
+    "training_method":"self-training",#"self-training","self-emsembling","increment-training" # enhance#先都填self-training
+    "use_two_model": False,# enhance#控制用不用双模型
+    "two_models_hyper_parameters":{#别调
         "student_dropout": 0.1,
         "student_decay": 0,  # 0 equal to not decay
     },
-    "use_strategy":True,# enhance
+    "use_strategy":True,# True,False # enhance#用不用我们的策略，不填1，2，3，填True False （能不能想想怎么让他自己决定不要每次都要手动改
     # "strategy_hyper_parameters":{
     #     "Z_RATIO":0.3,
     # },# use this when use_strategy==False
@@ -34,9 +36,8 @@ common = {
             "enh_rate":2,
             "relh_rate":2,
         },# use this when use_strategy==True
-    "LABEL_OF_TRAIN": 0.15,# enhance
-    "RE_DATA":True,# regenerate train_data
-
+    "LABEL_OF_TRAIN": 0.15,# enhance#有标签数据比例
+    "RE_DATA":True,# regenerate train_data, True,False
 
 }
 run_id=''.join(random.sample(string.ascii_letters + string.digits, 8))
@@ -46,8 +47,8 @@ common["run_name"] = "{}+{}+{}".format("TP1", common["hyper_parameters"]["shakin
 
 
 train_config = {
-    "train_data": "train_data-sample.json",
-    "valid_data": "valid_data-sample.json",
+    "train_data": "train_data-sample.json",#enhance
+    "valid_data": "valid_data-sample.json",#enhance
     "rel2id": "rel2id.json",
     # "logger": "wandb", # if wandb, comment the following four lines
 
@@ -60,19 +61,19 @@ train_config = {
     # only save the model state dict if F1 score surpasses <f1_2_save>
     "f1_2_save": 0,
     # whether train_config from scratch
-    "fr_scratch": True,
+    "fr_scratch": True,# False when use previous model; True retraining
     # write down notes here if you want, it will be logged
     "note": "start from scratch",
     # if not fr scratch, set a model_state_dict
-    "model_state_dict_path": "/home/hcw/TPlinker-joint-extraction-master/semitplinker/default_log_dir/U9Hs8dwu/model_state_dict_teacher_best.pt",
-    "is_load_2":False,
-    "same_ts":True,
-    "student_model_state_dict_path":"",
+    "model_state_dict_path": "/home/hcw/TPlinker-joint-extraction-master/semitplinker/default_log_dir/U9Hs8dwu/model_state_dict_teacher_best.pt",# if not fr scratch, set a model_state_dict
+    "is_load_2":False,# set model for student
+    "same_ts":True,# initial student is same as teacher
+    "student_model_state_dict_path":"",# set student model path, only avaliable when is_load_2==True and same_ts==False
     "hyper_parameters": {# enhance
-        "batch_size": 12,
-        "TOTAL_EPOCHS": 2,
-        "epochs": 10,
-        "student_epochs": 8,
+        "batch_size": 12,# set by GPU memory size
+        "TOTAL_EPOCHS": 2,# 4~10 for incremental，15~30 for self-training
+        "epochs": 10, #5 for nytstar，10 for webnlgstar
+        "student_epochs": 8,#4 for nytstar，8 for webnlgstar
         "seed": 2333,
         "log_interval": 10,
         "max_seq_len": 100,
