@@ -166,7 +166,7 @@ def batch2dataset(*args):
     return a
 
 class ResultRestore:
-    def __init__(self, log_path, start_epoch):
+    def __init__(self, log_path, start_epoch,use_tensorboard=False):
         import os
         self.log_path = log_path
         self.cur_ep=start_epoch
@@ -177,11 +177,17 @@ class ResultRestore:
         self._file_pool = {}
         self._json_pool={}
         self.text=""
+        self.ts_logger=None
+        if use_tensorboard:
+            from torch.utils.tensorboard import SummaryWriter
+            self.ts_logger=SummaryWriter(log_dir=log_dir)
 
-    def __del__(self):
-        self.log_file.close()
-        for i in self._file_pool.values():
-            i.close()
+    # def __del__(self):#结束时候系统自销毁
+    #     self.log_file.close()
+    #     for i in self._file_pool.values():
+    #         i.close()
+    #     if self.ts_logger:
+    #         self.ts_logger.close()
 
     def epoch_log(self, title,text):
         text = "Epoch: {}, {} : {}".format(self.cur_ep,title, text)
@@ -194,12 +200,19 @@ class ResultRestore:
     def add_epoch(self):
         self.cur_ep+=1
 
+    def get_cur_ep(self):
+        return self.cur_ep
+
     def add_file2pool(self,filename,file_mode="a"):
         f=open(filename, file_mode, encoding="utf-8")
         self._file_pool[filename]=f
 
     def add_json(self,key,item):
         self._json_pool[str(self.text+" "+key)]=item
+
+    def extent_json(self,dict_):
+        for key,item in dict_.items():
+            self._json_pool[str(self.text + " " + key)] = item
 
     def get_json(self):
         return self._json_pool
@@ -208,7 +221,7 @@ class ResultRestore:
         return self._file_pool[item]
 
     def __getitem__(self, item):
-        return self._file_pool[item]
+        return self._json_pool[item]
 
     def __setitem__(self, key, value):
         self._json_pool[key]=value
@@ -219,6 +232,12 @@ class ResultRestore:
     def set_text(self,text):
         self.text=text
 
+    def get_self_text(self):
+        return self.text
+
     def store_dict(self):
         pass
+
+    def ts_log(self):
+        return self.ts_logger
 

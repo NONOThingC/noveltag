@@ -4,13 +4,13 @@ import random
 ###！！！！！！！！！！！！！！注意，填True False，千万别写成true false或者“True” “False”
 common = {
     "disable_tqdm":True,
-    "exp_name": "webnlg_star",#"nyt","nyt_star",webnlg,webnlg_star #enhance #这个是数据集的名字，用nytstar或者webnlgstar
+    "exp_name": "nyt_star",#"nyt","nyt_star",webnlg,webnlg_star #enhance #这个是数据集的名字，用nytstar或者webnlgstar
     "rel2id": "rel2id.json",
     "device_num": 0,#控制用哪几张GPU
     # "encoder": "BiLSTM",
     "encoder": "BERT",
     "hyper_parameters": {
-        "shaking_type": "cln_plus", # nytstar用cat，webnlgstar用clnplus
+        "shaking_type": "cat", # nytstar用cat，webnlgstar用clnplus
         # cat, cat_plus, cln, cln_plus; Experiments show that cat/cat_plus work better with BiLSTM, while cln/cln_plus work better with BERT. The results in the paper are produced by "cat". So, if you want to reproduce the results, "cat" is enough, no matter for BERT or BiLSTM.
         "inner_enc_type": "lstm",#not change here
         # valid only if cat_plus or cln_plus is set. It is the way how to encode inner tokens between each token pairs. If you only want to reproduce the results, just leave it alone.
@@ -35,10 +35,10 @@ common = {
     "strategy_hyper_parameters":{
             "enh_rate":2,
             "relh_rate":2,
+             "Z_RATIO":0.3,
         },# use this when use_strategy==True
-    "LABEL_OF_TRAIN": 0.15,# enhance#有标签数据比例
-    "RE_DATA":True,# regenerate train_data, True,False
-
+    "LABEL_OF_TRAIN": 0.1,# enhance#有标签数据比例
+    "RE_DATA":False,# regenerate train_data, True,False
 }
 run_id=''.join(random.sample(string.ascii_letters + string.digits, 8))
 
@@ -47,8 +47,8 @@ common["run_name"] = "{}+{}+{}".format("TP1", common["hyper_parameters"]["shakin
 
 
 train_config = {
-    "train_data": "train_data-sample.json",#enhance
-    "valid_data": "valid_data-sample.json",#enhance
+    "train_data": "train_data.json",#enhance
+    "valid_data": "valid_data.json",#enhance
     "rel2id": "rel2id.json",
     # "logger": "wandb", # if wandb, comment the following four lines
 
@@ -70,10 +70,10 @@ train_config = {
     "same_ts":True,# initial student is same as teacher
     "student_model_state_dict_path":"",# set student model path, only avaliable when is_load_2==True and same_ts==False
     "hyper_parameters": {# enhance
-        "batch_size": 12,# set by GPU memory size
-        "TOTAL_EPOCHS": 2,# 4~10 for incremental，15~30 for self-training
-        "epochs": 10, #5 for nytstar，10 for webnlgstar
-        "student_epochs": 8,#4 for nytstar，8 for webnlgstar
+        "batch_size": 24,# set by GPU memory size
+        "TOTAL_EPOCHS": 20,# 4~10 for incremental，15~30 for self-training
+        "epochs": 5, #5 for nytstar，10 for webnlgstar
+        "student_epochs": 4,#4 for nytstar，8 for webnlgstar
         "seed": 2333,
         "log_interval": 10,
         "max_seq_len": 100,
